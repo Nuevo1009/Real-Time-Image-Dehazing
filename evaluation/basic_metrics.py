@@ -6,97 +6,154 @@ from skimage.metrics import (
 )
 
 
-# ==================================================
-# CALCULATE BASIC IMAGE QUALITY METRICS
-# ==================================================
+# ============================================================
+# RGB -> GRAYSCALE
+# ============================================================
 
-def calculate_basic_metrics(output_image, ground_truth_image):
-
+def rgb_to_gray(image):
     """
-    Calculates PSNR and SSIM between the output
-    dehazed image and the ground truth clear image.
+    Convert RGB image to grayscale using RGB luminance weights.
 
-    Parameters
-    ----------
-    output_image : numpy.ndarray
-        Dehazed/final output image in RGB format.
+    No BGR conversion is performed.
 
-    ground_truth_image : numpy.ndarray
-        Ground truth clear image in RGB format.
+    Input:
+        RGB uint8 or float image
 
-    Returns
-    -------
-    dict
-        Dictionary containing PSNR and SSIM.
+    Output:
+        grayscale float32
     """
 
+    image = np.asarray(
+        image,
+        dtype=np.float32
+    )
 
-    # ----------------------------------------------
-    # CHECK IMAGE SIZE
-    # ----------------------------------------------
+    if image.max() > 1.0:
+        image = image / 255.0
 
-    if output_image.shape != ground_truth_image.shape:
+    gray = (
+        0.299 * image[:, :, 0]
+        +
+        0.587 * image[:, :, 1]
+        +
+        0.114 * image[:, :, 2]
+    )
+
+    return gray.astype(
+        np.float32
+    )
+
+
+# ============================================================
+# PSNR
+# ============================================================
+
+def calculate_psnr(
+    output_rgb,
+    ground_truth_rgb
+):
+    """
+    Calculate PSNR between RGB images.
+
+    Higher is better.
+    """
+
+    output = np.asarray(
+        output_rgb,
+        dtype=np.float32
+    )
+
+    ground_truth = np.asarray(
+        ground_truth_rgb,
+        dtype=np.float32
+    )
+
+    score = peak_signal_noise_ratio(
+        ground_truth,
+        output,
+        data_range=255
+    )
+
+    return float(score)
+
+
+# ============================================================
+# SSIM
+# ============================================================
+
+def calculate_ssim(
+    output_rgb,
+    ground_truth_rgb
+):
+    """
+    Calculate SSIM using RGB-derived luminance.
+
+    Higher is better.
+    """
+
+    output_gray = rgb_to_gray(
+        output_rgb
+    )
+
+    ground_truth_gray = rgb_to_gray(
+        ground_truth_rgb
+    )
+
+    min_dimension = min(
+        output_gray.shape[0],
+        output_gray.shape[1]
+    )
+
+    if min_dimension >= 7:
+
+        win_size = 7
+
+    else:
+
+        win_size = min_dimension
+
+        if win_size % 2 == 0:
+            win_size -= 1
+
+    if win_size < 3:
 
         raise ValueError(
-
-            "Output image and ground truth image "
-            "must have the same dimensions."
+            "Image is too small for SSIM."
         )
 
-
-    # ----------------------------------------------
-    # CONVERT TO FLOAT
-    # ----------------------------------------------
-
-    output_image = output_image.astype(
-
-        np.float32
+    score = structural_similarity(
+        ground_truth_gray,
+        output_gray,
+        data_range=1.0,
+        win_size=win_size
     )
 
-
-    ground_truth_image = ground_truth_image.astype(
-
-        np.float32
-    )
+    return float(score)
 
 
-    # ----------------------------------------------
-    # PSNR
-    # ----------------------------------------------
+# ============================================================
+# BASIC METRICS
+# ============================================================
 
-    psnr_score = peak_signal_noise_ratio(
-
-        ground_truth_image,
-
-        output_image,
-
-        data_range=255
-    )
-
-
-    # ----------------------------------------------
-    # SSIM
-    # ----------------------------------------------
-
-    ssim_score = structural_similarity(
-
-        ground_truth_image,
-
-        output_image,
-
-        channel_axis=-1,
-
-        data_range=255
-    )
-
-
-    # ----------------------------------------------
-    # RETURN RESULTS
-    # ----------------------------------------------
+def calculate_basic_metrics(
+    output_rgb,
+    ground_truth_rgb
+):
+    """
+    Calculate PSNR and SSIM.
+    """
 
     return {
 
-        "psnr": float(psnr_score),
+        "psnr":
+            calculate_psnr(
+                output_rgb,
+                ground_truth_rgb
+            ),
 
-        "ssim": float(ssim_score)
+        "ssim":
+            calculate_ssim(
+                output_rgb,
+                ground_truth_rgb
+            )
     }

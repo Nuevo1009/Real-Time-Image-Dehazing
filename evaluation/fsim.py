@@ -1,58 +1,215 @@
-import torch
-import piq
-import numpy as np
 import cv2
+import numpy as np
 
 
-def calculate_fsim(dehazed, ground_truth, device=None):
+# ============================================================
+# RGB -> GRAY
+# ============================================================
+
+def rgb_to_gray(
+    image
+):
+
+    image = image.astype(
+        np.float32
+    )
+
+    if image.max() > 1.0:
+
+        image = image / 255.0
+
+    gray = (
+        0.299 * image[:, :, 0]
+        +
+        0.587 * image[:, :, 1]
+        +
+        0.114 * image[:, :, 2]
+    )
+
+    return gray
+
+
+# ============================================================
+# FSIM
+# ============================================================
+
+def calculate_fsim(
+    output_rgb,
+    ground_truth_rgb
+):
     """
-    Calculate Feature Similarity Index (FSIM).
+    Feature Similarity approximation.
 
-    Input images should be RGB uint8 arrays.
+    Higher is better.
 
-    Returns FSIM value.
+    RGB-only input.
     """
 
-    # Match size
-    if dehazed.shape[:2] != ground_truth.shape[:2]:
+    output_gray = rgb_to_gray(
+        output_rgb
+    )
 
-        dehazed = cv2.resize(
-            dehazed,
-            (ground_truth.shape[1], ground_truth.shape[0]),
-            interpolation=cv2.INTER_LINEAR
+    gt_gray = rgb_to_gray(
+        ground_truth_rgb
+    )
+
+    # --------------------------------------------------------
+    # Sobel gradient
+    # --------------------------------------------------------
+
+    output_x = cv2.Sobel(
+        output_gray,
+        cv2.CV_32F,
+        1,
+        0,
+        ksize=3
+    )
+
+    output_y = cv2.Sobel(
+        output_gray,
+        cv2.CV_32F,
+        0,
+        1,
+        ksize=3
+    )
+
+    gt_x = cv2.Sobel(
+        gt_gray,
+        cv2.CV_32F,
+        1,
+        0,
+        ksize=3
+    )
+
+    gt_y = cv2.Sobel(
+        gt_gray,
+        cv2.CV_32F,
+        0,
+        1,
+        ksize=3
+    )
+
+    output_gradient = np.sqrt(
+        output_x ** 2
+        +
+        output_y ** 2
+    )
+
+    gt_gradient = np.sqrt(
+        gt_x ** 2
+        +
+        gt_y ** 2
+    )
+
+    # --------------------------------------------------------
+    # Gradient similarity
+    # --------------------------------------------------------
+
+    T = 0.01
+
+    gradient_similarity = (
+
+        2.0
+        *
+        output_gradient
+        *
+        gt_gradient
+        +
+        T
+
+    ) / (
+
+        output_gradient ** 2
+        +
+        gt_gradient ** 2
+        +
+        T
+    )
+
+    # --------------------------------------------------------
+    # Laplacian feature response
+    # --------------------------------------------------------
+
+    output_feature = np.abs(
+        cv2.Laplacian(
+            output_gray,
+            cv2.CV_32F
         )
+    )
 
-    # Default device
-    if device is None:
-
-        device = torch.device(
-            "cuda" if torch.cuda.is_available()
-            else "cpu"
+    gt_feature = np.abs(
+        cv2.Laplacian(
+            gt_gray,
+            cv2.CV_32F
         )
+    )
 
-    # Convert HWC -> CHW
-    dehazed_tensor = torch.from_numpy(
-        dehazed.transpose(2, 0, 1)
-    ).unsqueeze(0).float()
+    output_feature /= (
+        np.max(output_feature)
+        +
+        1e-8
+    )
 
-    gt_tensor = torch.from_numpy(
-        ground_truth.transpose(2, 0, 1)
-    ).unsqueeze(0).float()
+    gt_feature /= (
+        np.max(gt_feature)
+        +
+        1e-8
+    )
 
-    # Normalize
-    dehazed_tensor = dehazed_tensor / 255.0
-    gt_tensor = gt_tensor / 255.0
+    feature_similarity = (
 
-    # Move to device
-    dehazed_tensor = dehazed_tensor.to(device)
-    gt_tensor = gt_tensor.to(device)
+        2.0
+        *
+        output_feature
+        *
+        gt_feature
+        +
+        T
 
-    with torch.no_grad():
+    ) / (
 
-        fsim_value = piq.fsim(
-            dehazed_tensor,
-            gt_tensor,
-            data_range=1.0
+        output_feature ** 2
+        +
+        gt_feature ** 2
+        +
+        T
+    )
+
+    # --------------------------------------------------------
+    # FSIM map
+    # --------------------------------------------------------
+
+    similarity_map = (
+        gradient_similarity
+        *
+        feature_similarity
+    )
+
+    weight = np.maximum(
+        output_feature,
+        gt_feature
+    )
+
+    denominator = (
+        np.sum(weight)
+        +
+        1e-8
+    )
+
+    score = (
+        np.sum(
+            similarity_map
+            *
+            weight
         )
+        /
+        denominator
+    )
 
-    return float(fsim_value.cpu().item())
+    return float(
+        np.clip(
+            score,
+            0.0,
+            1.0
+        )
+    )

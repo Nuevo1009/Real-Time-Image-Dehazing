@@ -3,410 +3,268 @@ import numpy as np
 
 
 # ============================================================
+# DEFAULT PARAMETERS
+# ============================================================
+
+from .default_dehaze_params import (
+    default_dehaze_params
+)
+
+
+# ============================================================
 # DARK CHANNEL
 # ============================================================
 
-def get_dark_channel(image, window_size=15):
-
-    """
-    Calculate the Dark Channel Prior.
-    """
-
-    image = image.astype(np.float32)
-
-    minimum_channel = np.min(
-        image,
-        axis=2
-    )
-
-    kernel = cv2.getStructuringElement(
-
-        cv2.MORPH_RECT,
-
-        (
-            window_size,
-            window_size
-        )
-
-    )
-
-    dark_channel = cv2.erode(
-
-        minimum_channel,
-
-        kernel
-
-    )
-
-    return dark_channel
+from .dark_channel import (
+    compute_dark_channel
+)
 
 
 # ============================================================
 # ATMOSPHERIC LIGHT
 # ============================================================
 
-def estimate_atmospheric_light(
-    image,
-    dark_channel,
-    top_percent=0.001
+from .atmospheric_light import (
+    estimate_atmospheric_light,
+    pixelwise_atmospheric_light
+)
+
+
+# ============================================================
+# TRANSMISSION
+# ============================================================
+
+from .transmission import (
+    pixelwise_transmission,
+    refine_transmission
+)
+
+
+# ============================================================
+# SCENE DEHAZING
+# ============================================================
+
+from .scene_dehazing import (
+    scene_dehazing
+)
+
+
+# ============================================================
+# CLARITY ENHANCEMENT
+# ============================================================
+
+from .clarity_enhancement import (
+    enhance_clarity
+)
+
+
+# ============================================================
+# MAIN ADAPTIVE DEHAZING FUNCTION
+# ============================================================
+
+def adaptive_dehaze(
+    image_rgb,
+    params=None
 ):
-
     """
-    Estimate atmospheric light from brightest dark-channel pixels.
-    """
+    RGB-ONLY Adaptive Image Dehazing.
 
-    height, width = dark_channel.shape
+    ========================================================
+    INPUT
+    ========================================================
 
-    total_pixels = (
+    image_rgb:
 
-        height
-        *
-        width
+        RGB image.
 
-    )
+        Supported formats:
 
-    number_of_pixels = max(
+            uint8  -> [0, 255]
 
-        int(
-            total_pixels
-            *
-            top_percent
-        ),
+            float -> [0, 1]
 
-        1
+            float -> [0, 255]
 
-    )
+    ========================================================
+    OUTPUT
+    ========================================================
 
+    Returns:
 
-    dark_vector = dark_channel.reshape(
+        dehazed_rgb
+            RGB uint8 image [0,255]
 
-        -1
+        state
+            Reserved for future use.
 
-    )
+        debug
+            Dictionary containing intermediate results.
 
+    ========================================================
+    IMPORTANT
+    ========================================================
 
-    image_vector = image.reshape(
+    This function DOES NOT perform:
 
-        -1,
-        3
+        BGR -> RGB
 
-    )
+    or:
 
+        RGB -> BGR
 
-    indices = np.argsort(
+    The image remains RGB throughout the complete
+    dehazing algorithm.
 
-        dark_vector
-
-    )[-number_of_pixels:]
-
-
-    atmospheric_light = np.mean(
-
-        image_vector[indices],
-
-        axis=0
-
-    )
-
-
-    atmospheric_light = np.maximum(
-
-        atmospheric_light,
-
-        1e-6
-
-    )
-
-
-    return atmospheric_light
-
-
-# ============================================================
-# TRANSMISSION ESTIMATION
-# ============================================================
-
-def estimate_transmission(
-    image,
-    atmospheric_light,
-    omega=0.95,
-    window_size=15
-):
-
-    """
-    Estimate transmission map using Dark Channel Prior.
+    OpenCV is used only for numerical image processing
+    operations such as resizing. No color conversion is used.
     """
 
-    normalized_image = (
 
-        image
+    # ========================================================
+    # STEP 0
+    # PARAMETERS
+    # ========================================================
 
-        /
+    if params is None:
 
-        atmospheric_light
+        params = default_dehaze_params()
 
-    )
 
+    # ========================================================
+    # STEP 1
+    # VALIDATE INPUT
+    # ========================================================
 
-    dark_channel = get_dark_channel(
+    if image_rgb is None:
 
-        normalized_image,
+        raise ValueError(
+            "Input RGB image is None."
+        )
 
-        window_size
 
-    )
+    if not isinstance(
+        image_rgb,
+        np.ndarray
+    ):
 
+        raise TypeError(
+            "Input image must be a NumPy array."
+        )
 
-    transmission = (
 
-        1.0
+    if image_rgb.ndim != 3:
 
-        -
+        raise ValueError(
+            "Input image must have shape H x W x 3."
+        )
 
-        omega
 
-        *
+    if image_rgb.shape[2] != 3:
 
-        dark_channel
+        raise ValueError(
+            "Input image must have exactly "
+            "3 RGB channels."
+        )
 
-    )
 
+    # ========================================================
+    # STEP 2
+    # NORMALIZE RGB IMAGE
+    # ========================================================
 
-    transmission = np.clip(
+    if np.issubdtype(
+        image_rgb.dtype,
+        np.integer
+    ):
 
-        transmission,
+        # ----------------------------------------------------
+        # uint8 RGB [0,255]
+        # ----------------------------------------------------
 
-        0.05,
+        image = (
 
-        1.0
+            image_rgb.astype(
+                np.float32
+            )
 
-    )
+            /
 
+            255.0
 
-    return transmission
+        )
 
+    else:
 
-# ============================================================
-# TRANSMISSION REFINEMENT
-# ============================================================
+        # ----------------------------------------------------
+        # Floating-point RGB image
+        # ----------------------------------------------------
 
-def refine_transmission(
-    image_bgr,
-    transmission,
-    radius=40,
-    eps=1e-3
-):
+        image = np.asarray(
+            image_rgb,
+            dtype=np.float32
+        )
 
-    """
-    Refine transmission using edge-preserving filtering.
-    """
 
-    transmission_uint8 = (
+        # ----------------------------------------------------
+        # If input is [0,255], normalize it
+        # ----------------------------------------------------
 
-        transmission
-        *
-        255.0
+        if image.size > 0:
 
-    ).astype(
+            max_value = float(
+                np.max(image)
+            )
 
-        np.uint8
+            if max_value > 1.0:
 
-    )
+                image = (
 
+                    image
 
-    refined = cv2.bilateralFilter(
+                    /
 
-        transmission_uint8,
+                    255.0
 
-        d=9,
+                )
 
-        sigmaColor=75,
 
-        sigmaSpace=75
+    # --------------------------------------------------------
+    # Final safety clipping
+    # --------------------------------------------------------
 
-    )
+    image = np.clip(
 
-
-    refined = (
-
-        refined.astype(np.float32)
-
-        /
-
-        255.0
-
-    )
-
-
-    refined = np.clip(
-
-        refined,
-
-        0.05,
-
-        1.0
-
-    )
-
-
-    return refined
-
-
-# ============================================================
-# RECOVER DEHAZED IMAGE
-# ============================================================
-
-def recover_scene(
-    image,
-    atmospheric_light,
-    transmission,
-    transmission_min=0.1
-):
-
-    """
-    Recover the dehazed image.
-    """
-
-    transmission = np.maximum(
-
-        transmission,
-
-        transmission_min
-
-    )
-
-
-    transmission = transmission[
-
-        :,
-        :,
-        np.newaxis
-
-    ]
-
-
-    recovered = (
-
-        image
-
-        -
-
-        atmospheric_light
-
-    )
-
-
-    recovered = (
-
-        recovered
-
-        /
-
-        transmission
-
-    )
-
-
-    recovered = (
-
-        recovered
-
-        +
-
-        atmospheric_light
-
-    )
-
-
-    recovered = np.clip(
-
-        recovered,
+        image,
 
         0.0,
 
         1.0
 
-    )
+    ).astype(
 
-
-    return recovered
-
-
-# ============================================================
-# ADAPTIVE TRANSMISSION ADJUSTMENT
-# ============================================================
-
-def adaptive_transmission_adjustment(
-    transmission,
-    haze_strength
-):
-
-    """
-    Adapt transmission according to estimated haze strength.
-    """
-
-    # --------------------------------------------------------
-    # Strong haze -> stronger dehazing
-    # --------------------------------------------------------
-
-    if haze_strength > 0.65:
-
-        factor = 0.85
-
-
-    # --------------------------------------------------------
-    # Medium haze
-    # --------------------------------------------------------
-
-    elif haze_strength > 0.35:
-
-        factor = 0.92
-
-
-    # --------------------------------------------------------
-    # Low haze
-    # --------------------------------------------------------
-
-    else:
-
-        factor = 0.97
-
-
-    adjusted_transmission = (
-
-        transmission
-
-        *
-
-        factor
+        np.float32
 
     )
 
 
-    adjusted_transmission = np.clip(
+    # ========================================================
+    # STEP 3
+    # DARK CHANNEL
+    # ========================================================
 
-        adjusted_transmission,
+    dark_channel = compute_dark_channel(
 
-        0.05,
+        image,
 
-        1.0
+        params.patch_size
 
     )
 
 
-    return adjusted_transmission
-
-
-# ============================================================
-# ESTIMATE HAZE STRENGTH
-# ============================================================
-
-def estimate_haze_strength(
-    dark_channel
-):
-
-    """
-    Estimate haze strength from the mean dark channel value.
-    """
+    # ========================================================
+    # STEP 4
+    # HAZE STRENGTH
+    # ========================================================
 
     haze_strength = float(
 
@@ -419,9 +277,251 @@ def estimate_haze_strength(
     )
 
 
-    haze_strength = np.clip(
+    haze_strength = float(
 
-        haze_strength,
+        np.clip(
+
+            haze_strength,
+
+            0.0,
+
+            1.0
+
+        )
+
+    )
+
+
+    # ========================================================
+    # STEP 5
+    # DOWNSAMPLING
+    # ========================================================
+
+    down_factor = max(
+
+        1,
+
+        int(
+
+            params.down_factor
+
+        )
+
+    )
+
+
+    if down_factor > 1:
+
+        height, width = (
+
+            image.shape[:2]
+
+        )
+
+
+        down_width = max(
+
+            1,
+
+            width // down_factor
+
+        )
+
+
+        down_height = max(
+
+            1,
+
+            height // down_factor
+
+        )
+
+
+        # ----------------------------------------------------
+        # IMPORTANT:
+        #
+        # cv2.resize() does NOT change RGB to BGR.
+        #
+        # It only resizes the three channels.
+        # ----------------------------------------------------
+
+        image_down = cv2.resize(
+
+            image,
+
+            (
+                down_width,
+                down_height
+            ),
+
+            interpolation=cv2.INTER_AREA
+
+        )
+
+    else:
+
+        image_down = image.copy()
+
+
+    # ========================================================
+    # STEP 6
+    # ATMOSPHERIC LIGHT ESTIMATION
+    # ========================================================
+
+    (
+        AF,
+        AN,
+        Th,
+        dark_down
+
+    ) = estimate_atmospheric_light(
+
+        image_down,
+
+        params.patch_size,
+
+        th_ref=None
+
+    )
+
+
+    # ========================================================
+    # STEP 7
+    # PIXEL-WISE ATMOSPHERIC LIGHT
+    # ========================================================
+
+    atmospheric_light = (
+
+        pixelwise_atmospheric_light(
+
+            image,
+
+            AF,
+
+            AN
+
+        )
+
+    )
+
+
+    # ========================================================
+    # STEP 8
+    # GAMMA-BASED PIXEL-WISE TRANSMISSION
+    # ========================================================
+
+    transmission = (
+
+        pixelwise_transmission(
+
+            image,
+
+            atmospheric_light,
+
+            omega=params.omega,
+
+            gamma=params.gamma,
+
+            t_min=params.t_min
+
+        )
+
+    )
+
+
+    # ========================================================
+    # STEP 9
+    # TRANSMISSION REFINEMENT
+    # ========================================================
+
+    transmission = (
+
+        refine_transmission(
+
+            transmission,
+
+            radius=params.bilateral_d,
+
+            sigma_color=(
+                params.bilateral_sigma_color
+            ),
+
+            sigma_space=(
+                params.bilateral_sigma_space
+            )
+
+        )
+
+    )
+
+
+    # ========================================================
+    # STEP 10
+    # SCENE RECOVERY
+    # ========================================================
+
+    dehazed = scene_dehazing(
+
+        image,
+
+        atmospheric_light,
+
+        transmission
+
+    )
+
+
+    # ========================================================
+    # STEP 11
+    # OPTIONAL CLARITY ENHANCEMENT
+    # ========================================================
+
+    if getattr(
+
+        params,
+
+        "enable_clarity",
+
+        False
+
+    ):
+
+        # ----------------------------------------------------
+        # clarity_strength is used as the sharpening amount
+        # ----------------------------------------------------
+
+        clarity_strength = float(
+
+            getattr(
+
+                params,
+
+                "clarity_strength",
+
+                0.20
+
+            )
+
+        )
+
+
+        dehazed = enhance_clarity(
+
+            dehazed,
+
+            sharpen_amount=clarity_strength
+
+        )
+
+
+    # ========================================================
+    # STEP 12
+    # FINAL RGB UINT8 IMAGE
+    # ========================================================
+
+    dehazed = np.clip(
+
+        dehazed,
 
         0.0,
 
@@ -430,244 +530,168 @@ def estimate_haze_strength(
     )
 
 
-    return haze_strength
+    dehazed_rgb = (
 
-
-# ============================================================
-# MAIN DEHAZING FUNCTION
-# ============================================================
-
-def adaptive_dehaze(
-    image_bgr
-):
-
-    """
-    Main adaptive image dehazing function.
-
-    INPUT:
-        OpenCV BGR uint8 image
-
-    OUTPUT:
-        Dehazed BGR uint8 image
-    """
-
-
-    # ========================================================
-    # VALIDATE INPUT
-    # ========================================================
-
-    if image_bgr is None:
-
-        raise ValueError(
-
-            "Input image is None."
-
-        )
-
-
-    if not isinstance(
-
-        image_bgr,
-
-        np.ndarray
-
-    ):
-
-        raise TypeError(
-
-            "Input image must be a NumPy array."
-
-        )
-
-
-    if len(
-
-        image_bgr.shape
-
-    ) != 3:
-
-        raise ValueError(
-
-            "Input image must have 3 color channels."
-
-        )
-
-
-    # ========================================================
-    # CONVERT BGR -> RGB
-    # ========================================================
-
-    image_rgb = cv2.cvtColor(
-
-        image_bgr,
-
-        cv2.COLOR_BGR2RGB
-
-    )
-
-
-    # ========================================================
-    # NORMALIZE IMAGE
-    # ========================================================
-
-    image = (
-
-        image_rgb.astype(
-
-            np.float32
-
-        )
-
-        /
-
-        255.0
-
-    )
-
-
-    # ========================================================
-    # DARK CHANNEL
-    # ========================================================
-
-    dark_channel = get_dark_channel(
-
-        image,
-
-        window_size=15
-
-    )
-
-
-    # ========================================================
-    # HAZE STRENGTH
-    # ========================================================
-
-    haze_strength = estimate_haze_strength(
-
-        dark_channel
-
-    )
-
-
-    # ========================================================
-    # ATMOSPHERIC LIGHT
-    # ========================================================
-
-    atmospheric_light = (
-
-        estimate_atmospheric_light(
-
-            image,
-
-            dark_channel
-
-        )
-
-    )
-
-
-    # ========================================================
-    # TRANSMISSION MAP
-    # ========================================================
-
-    transmission = (
-
-        estimate_transmission(
-
-            image,
-
-            atmospheric_light,
-
-            omega=0.95,
-
-            window_size=15
-
-        )
-
-    )
-
-
-    # ========================================================
-    # ADAPTIVE TRANSMISSION
-    # ========================================================
-
-    transmission = (
-
-        adaptive_transmission_adjustment(
-
-            transmission,
-
-            haze_strength
-
-        )
-
-    )
-
-
-    # ========================================================
-    # REFINE TRANSMISSION
-    # ========================================================
-
-    transmission = (
-
-        refine_transmission(
-
-            image_bgr,
-
-            transmission
-
-        )
-
-    )
-
-
-    # ========================================================
-    # RECOVER SCENE
-    # ========================================================
-
-    recovered = (
-
-        recover_scene(
-
-            image,
-
-            atmospheric_light,
-
-            transmission,
-
-            transmission_min=0.1
-
-        )
-
-    )
-
-
-    # ========================================================
-    # CONVERT RGB -> BGR
-    # ========================================================
-
-    recovered_rgb = (
-
-        recovered
+        dehazed
 
         *
 
         255.0
 
-    ).astype(
+    ).round().astype(
 
         np.uint8
 
     )
 
 
-    recovered_bgr = cv2.cvtColor(
+    # ========================================================
+    # STEP 13
+    # FINAL OUTPUT VALIDATION
+    # ========================================================
 
-        recovered_rgb,
+    if dehazed_rgb.ndim != 3:
 
-        cv2.COLOR_RGB2BGR
+        raise RuntimeError(
+
+            "Dehazing output does not have "
+            "3 dimensions."
+
+        )
+
+
+    if dehazed_rgb.shape[2] != 3:
+
+        raise RuntimeError(
+
+            "Dehazing output does not have "
+            "3 RGB channels."
+
+        )
+
+
+    # ========================================================
+    # STEP 14
+    # DEBUG INFORMATION
+    # ========================================================
+
+    debug = {
+
+        # ----------------------------------------------------
+        # Atmospheric light
+        # ----------------------------------------------------
+
+        "AF":
+            AF,
+
+        "AN":
+            AN,
+
+
+        # ----------------------------------------------------
+        # Threshold
+        # ----------------------------------------------------
+
+        "Th":
+            Th,
+
+
+        # ----------------------------------------------------
+        # Haze strength
+        # ----------------------------------------------------
+
+        "haze_strength":
+            haze_strength,
+
+
+        # ----------------------------------------------------
+        # Dark channel
+        # ----------------------------------------------------
+
+        "dark_channel":
+            dark_channel,
+
+        "dark_down":
+            dark_down,
+
+
+        # ----------------------------------------------------
+        # Atmospheric light image
+        # ----------------------------------------------------
+
+        "atmospheric_light":
+            atmospheric_light,
+
+
+        # ----------------------------------------------------
+        # Transmission map
+        # ----------------------------------------------------
+
+        "tm":
+            transmission,
+
+
+        # ----------------------------------------------------
+        # Parameters
+        # ----------------------------------------------------
+
+        "gamma":
+            params.gamma,
+
+        "omega":
+            params.omega,
+
+        "t_min":
+            params.t_min,
+
+        "patch_size":
+            params.patch_size,
+
+        "down_factor":
+            params.down_factor,
+
+
+        # ----------------------------------------------------
+        # Clarity
+        # ----------------------------------------------------
+
+        "post_clarity_enabled":
+            getattr(
+                params,
+                "enable_clarity",
+                False
+            ),
+
+        "clarity_strength":
+            getattr(
+                params,
+                "clarity_strength",
+                0.20
+            ),
+
+        # ----------------------------------------------------
+        # Format information
+        # ----------------------------------------------------
+
+        "input_format":
+            "RGB",
+
+        "output_format":
+            "RGB"
+
+    }
+
+
+    # ========================================================
+    # RETURN
+    # ========================================================
+
+    return (
+
+        dehazed_rgb,
+
+        None,
+
+        debug
 
     )
-
-
-    return recovered_bgr

@@ -1,30 +1,60 @@
+import cv2
 import numpy as np
 
+
+# ============================================================
+# PIXEL-WISE TRANSMISSION
+# ============================================================
 
 def pixelwise_transmission(
     image,
     atmospheric_light,
-    omega,
-    gamma,
+    omega=0.9375,
+    gamma=2.0,
     t_min=0.1
 ):
     """
-    Python equivalent of:
+    Gamma-based transmission estimation.
 
-        pixelwiseTransmission(
-            Mhazy,
-            A,
-            omega,
-            gamma,
-            tMin
+    k =
+        1 -
+        (Imin / (Imin + Imax))^gamma
+
+    ratio =
+        min(
+            IR/AR,
+            IG/AG,
+            IB/AB
         )
+
+    t =
+        1 - omega * ratio * k
+
+    Input is RGB.
     """
 
+    image = np.asarray(
+        image,
+        dtype=np.float32
+    )
+
+    atmospheric_light = np.asarray(
+        atmospheric_light,
+        dtype=np.float32
+    )
+
+    if image.ndim != 3:
+        raise ValueError(
+            "Image must have shape H x W x 3."
+        )
+
+    if image.shape[2] != 3:
+        raise ValueError(
+            "Image must be RGB."
+        )
+
     # --------------------------------------------------------
-    # MATLAB:
-    #
-    # minMH = min(Mhazy, [], 3);
-    # maxMH = max(Mhazy, [], 3);
+    # Minimum and maximum RGB
     # --------------------------------------------------------
 
     min_mh = np.min(
@@ -38,10 +68,7 @@ def pixelwise_transmission(
     )
 
     # --------------------------------------------------------
-    # Eq. 13
-    #
-    # denom = minMH + maxMH;
-    # denom(denom == 0) = eps;
+    # Denominator
     # --------------------------------------------------------
 
     denom = (
@@ -50,36 +77,45 @@ def pixelwise_transmission(
         max_mh
     )
 
-    denom = np.where(
-        denom == 0,
-        np.finfo(np.float32).eps,
-        denom
+    denom = np.maximum(
+        denom,
+        np.finfo(np.float32).eps
     )
 
     # --------------------------------------------------------
-    # k = 1 - (minMH / denom)^gamma
+    # Gamma factor
     # --------------------------------------------------------
+
+    normalized_min = (
+        min_mh / denom
+    )
+
+    normalized_min = np.clip(
+        normalized_min,
+        0.0,
+        1.0
+    )
 
     k = (
         1.0
         -
         np.power(
-            min_mh / denom,
+            normalized_min,
             gamma
         )
     )
 
     # --------------------------------------------------------
-    # Guard atmospheric light
+    # Atmospheric light protection
     # --------------------------------------------------------
 
     A_safe = np.maximum(
         atmospheric_light,
-        np.finfo(np.float32).eps
+        1e-3
     )
 
     # --------------------------------------------------------
-    # Channel ratios
+    # RGB ratios
     # --------------------------------------------------------
 
     ratio_r = (
@@ -100,10 +136,6 @@ def pixelwise_transmission(
         A_safe[:, :, 2]
     )
 
-    # --------------------------------------------------------
-    # min RGB ratio
-    # --------------------------------------------------------
-
     ratio = np.minimum.reduce(
         [
             ratio_r,
@@ -112,13 +144,17 @@ def pixelwise_transmission(
         ]
     )
 
+    ratio = np.clip(
+        ratio,
+        0.0,
+        1.5
+    )
+
     # --------------------------------------------------------
-    # Eq. 12
-    #
-    # tm = 1 - omega * ratio * k
+    # Transmission
     # --------------------------------------------------------
 
-    tm = (
+    transmission = (
         1.0
         -
         omega
@@ -128,16 +164,55 @@ def pixelwise_transmission(
         k
     )
 
-    # --------------------------------------------------------
-    # Clamp:
-    #
-    # tm = min(max(tm,tMin),1)
-    # --------------------------------------------------------
-
-    tm = np.clip(
-        tm,
+    transmission = np.clip(
+        transmission,
         t_min,
         1.0
     )
 
-    return tm
+    return transmission.astype(
+        np.float32
+    )
+
+
+# ============================================================
+# TRANSMISSION REFINEMENT
+# ============================================================
+
+def refine_transmission(
+    transmission,
+    radius=9,
+    sigma_color=0.05,
+    sigma_space=15
+):
+    """
+    Refine transmission while keeping it float32.
+
+    No RGB/BGR conversion is involved.
+    """
+
+    transmission = np.asarray(
+        transmission,
+        dtype=np.float32
+    )
+
+    transmission = np.clip(
+        transmission,
+        0.0,
+        1.0
+    )
+
+    refined = cv2.bilateralFilter(
+        transmission,
+        d=radius,
+        sigmaColor=sigma_color,
+        sigmaSpace=sigma_space
+    )
+
+    return np.clip(
+        refined,
+        0.05,
+        1.0
+    ).astype(
+        np.float32
+    )

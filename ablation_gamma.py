@@ -1,18 +1,67 @@
 """
-Gamma Ablation Study
+============================================================
+GAMMA ABLATION STUDY
+============================================================
 
-Compares different transmission gamma values using:
+Tests different transmission gamma values and evaluates
+the resulting dehazed images.
+
+Metrics:
 
     PSNR
     SSIM
     FSIM
-    S-CIELAB DeltaE
+    S-CIELAB
     EPI
     Edge Retention
 
-The study uses the current dehazing modules and
-CNN_Dataset/test/hazy + clear folders.
+Dataset:
+
+    dataset/
+        CNN_Dataset/
+            test/
+                hazy/
+                clear/
+
+Dehazing modules are taken from:
+
+    dehazing/
+
+Evaluation modules are taken from:
+
+    evaluation/
+
+Important:
+
+    Images are loaded and saved as RGB.
+
+    Pillow is used for image I/O.
+
+    No BGR -> RGB conversion is performed.
+
+Results are saved to:
+
+    output/
+        ablation/
+            gamma_1.5/
+            gamma_2.0/
+
+            gamma_ablation_results.csv
+            gamma_ablation_results.xlsx
+
+            gamma_vs_psnr.png
+            gamma_vs_ssim.png
+            gamma_vs_fsim.png
+            gamma_vs_epi.png
+            gamma_vs_scielab.png
+            gamma_vs_edge_retention.png
+============================================================
 """
+
+
+# ============================================================
+# IMPORTS
+# ============================================================
 
 from pathlib import Path
 import re
@@ -21,6 +70,8 @@ import cv2
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+
+from PIL import Image
 
 
 # ============================================================
@@ -74,43 +125,73 @@ from evaluation.edge_no_reference import (
 # PROJECT DIRECTORIES
 # ============================================================
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = (
+    Path(__file__)
+    .resolve()
+    .parent
+)
 
 
-# ------------------------------------------------------------
+# ============================================================
 # HAZY TEST IMAGES
-# ------------------------------------------------------------
+# ============================================================
 
 HAZY_DIR = (
+
     BASE_DIR
-    / "dataset"
-    / "CNN_Dataset"
-    / "test"
-    / "hazy"
+
+    /
+    "dataset"
+
+    /
+    "CNN_Dataset"
+
+    /
+    "test"
+
+    /
+    "hazy"
+
 )
 
 
-# ------------------------------------------------------------
+# ============================================================
 # CLEAR / GROUND-TRUTH TEST IMAGES
-# ------------------------------------------------------------
+# ============================================================
 
 GT_DIR = (
+
     BASE_DIR
-    / "dataset"
-    / "CNN_Dataset"
-    / "test"
-    / "clear"
+
+    /
+    "dataset"
+
+    /
+    "CNN_Dataset"
+
+    /
+    "test"
+
+    /
+    "clear"
+
 )
 
 
-# ------------------------------------------------------------
+# ============================================================
 # OUTPUT DIRECTORY
-# ------------------------------------------------------------
+# ============================================================
 
 ABLATION_DIR = (
+
     BASE_DIR
-    / "output"
-    / "ablation"
+
+    /
+    "output"
+
+    /
+    "ablation"
+
 )
 
 
@@ -118,11 +199,12 @@ ABLATION_DIR = (
 # GAMMA VALUES
 # ============================================================
 
-# Same values used in your MATLAB ablation study.
-
 GAMMAS = [
+
     1.5,
+
     2.0
+
 ]
 
 
@@ -131,79 +213,144 @@ GAMMAS = [
 # ============================================================
 
 IMAGE_EXTENSIONS = {
+
     ".jpg",
     ".jpeg",
     ".png",
     ".bmp",
     ".tif",
     ".tiff"
+
 }
 
 
 # ============================================================
-# IMAGE READING
+# READ RGB IMAGE
 # ============================================================
 
-def read_rgb(path):
+def read_rgb(
+    path
+):
     """
-    Read an image using OpenCV and convert BGR -> RGB.
+    Read image directly as RGB.
 
     Returns:
-        RGB float32 image in range [0, 1].
+
+        RGB float32 image
+        range [0,1]
+
+    No BGR conversion.
     """
 
-    bgr = cv2.imread(
-        str(path),
-        cv2.IMREAD_COLOR
-    )
+    try:
 
-    if bgr is None:
-
-        raise RuntimeError(
-            f"Could not read image: {path}"
+        image = Image.open(
+            path
+        ).convert(
+            "RGB"
         )
 
-    rgb = cv2.cvtColor(
-        bgr,
-        cv2.COLOR_BGR2RGB
+    except Exception as exc:
+
+        raise RuntimeError(
+            f"Could not read image:\n"
+            f"{path}\n"
+            f"Reason: {exc}"
+        )
+
+    image = np.asarray(
+        image,
+        dtype=np.uint8
     )
 
-    rgb = (
-        rgb.astype(np.float32)
-        / 255.0
-    )
+    return (
 
-    return rgb
+        image.astype(
+            np.float32
+        )
+
+        /
+
+        255.0
+
+    )
 
 
 # ============================================================
-# IMAGE SAVING
+# SAVE RGB IMAGE
 # ============================================================
 
-def save_rgb(path, image):
+def save_rgb(
+    path,
+    image
+):
     """
-    Save RGB float image [0,1] as PNG.
+    Save RGB float image [0,1] directly.
+
+    No RGB -> BGR conversion.
     """
 
     image_uint8 = (
+
         np.clip(
+
             np.round(
-                image * 255.0
+
+                image
+                *
+                255.0
+
             ),
+
             0,
+
             255
+
         )
-        .astype(np.uint8)
+
+        .astype(
+            np.uint8
+        )
+
     )
 
-    bgr = cv2.cvtColor(
+    Image.fromarray(
         image_uint8,
-        cv2.COLOR_RGB2BGR
+        mode="RGB"
+    ).save(
+        path
     )
 
-    cv2.imwrite(
-        str(path),
-        bgr
+
+# ============================================================
+# CONVERT RGB FLOAT TO RGB UINT8
+# ============================================================
+
+def rgb_to_uint8(
+    image
+):
+    """
+    RGB float [0,1] -> RGB uint8.
+    """
+
+    return (
+
+        np.clip(
+
+            image
+            *
+            255.0,
+
+            0,
+
+            255
+
+        )
+
+        .astype(
+            np.uint8
+        )
+
     )
 
 
@@ -216,24 +363,27 @@ def find_gt(
     gt_files
 ):
     """
-    Find the corresponding clear / GT image.
+    Find corresponding clear ground truth.
 
     Matching order:
 
-    1. Exact filename stem
-    2. Leading numeric scene ID
+        1. Exact filename stem
+        2. Leading numeric scene ID
 
     Example:
 
-        40_outdoor.jpg
-        40.jpg
+        Hazy:
+            40_outdoor.jpg
 
-    can still be matched.
+        GT:
+            40.jpg
+
+    will match using scene ID 40.
     """
 
-    # --------------------------------------------------------
-    # Exact filename stem
-    # --------------------------------------------------------
+    # ========================================================
+    # EXACT STEM
+    # ========================================================
 
     hazy_stem = (
         hazy_path.stem.lower()
@@ -243,39 +393,79 @@ def find_gt(
 
         if (
             gt_path.stem.lower()
-            == hazy_stem
+            ==
+            hazy_stem
         ):
 
             return gt_path
 
 
-    # --------------------------------------------------------
-    # Leading numeric scene ID
-    # --------------------------------------------------------
+    # ========================================================
+    # REMOVE COMMON SUFFIXES
+    # ========================================================
+
+    clean_stem = re.sub(
+
+        r"(_hazy|_outdoor|_input)$",
+
+        "",
+
+        hazy_stem
+
+    )
+
+
+    for gt_path in gt_files:
+
+        if (
+            gt_path.stem.lower()
+            ==
+            clean_stem
+        ):
+
+            return gt_path
+
+
+    # ========================================================
+    # LEADING NUMERIC SCENE ID
+    # ========================================================
 
     match = re.match(
+
         r"^(\d+)",
+
         hazy_path.name
+
     )
+
 
     if match:
 
-        scene_id = match.group(1)
+        scene_id = (
+            match.group(1)
+        )
 
         candidates = []
+
 
         for gt_path in gt_files:
 
             if re.match(
+
                 r"^"
-                + re.escape(scene_id)
-                + r"(\D|$)",
+                +
+                re.escape(scene_id)
+                +
+                r"(\D|$)",
+
                 gt_path.name
+
             ):
 
                 candidates.append(
                     gt_path
                 )
+
 
         if candidates:
 
@@ -288,7 +478,7 @@ def find_gt(
 
 
 # ============================================================
-# TRANSMISSION DEHAZING FOR A SPECIFIC GAMMA
+# DEHAZE USING SPECIFIC GAMMA
 # ============================================================
 
 def dehaze_with_gamma(
@@ -297,119 +487,179 @@ def dehaze_with_gamma(
     params
 ):
     """
-    Perform the dehazing pipeline using a specific
+    Run the current dehazing pipeline using a specified
     transmission gamma.
 
-    Gamma is passed directly to:
+    Input:
 
-        pixelwise_transmission()
+        hazy:
+            RGB float32 [0,1]
 
-    which implements:
+    Output:
 
-        k = 1 - (minMH / (minMH + maxMH))^gamma
+        dehazed:
+            RGB float32 [0,1]
 
-        tm = 1 - omega * ratio * k
+        atmospheric_light
+
+        transmission
     """
 
-    # --------------------------------------------------------
-    # Downsample
-    # --------------------------------------------------------
+    # ========================================================
+    # DOWNSAMPLE
+    # ========================================================
 
-    down_factor = params.down_factor
+    down_factor = (
+        params.down_factor
+    )
 
-    height, width = hazy.shape[:2]
+    height, width = (
+        hazy.shape[:2]
+    )
 
     down_width = max(
+
         1,
-        width // down_factor
+
+        width
+        //
+        down_factor
+
     )
 
     down_height = max(
+
         1,
-        height // down_factor
+
+        height
+        //
+        down_factor
+
     )
 
+
     image_down = cv2.resize(
+
         hazy,
+
         (
             down_width,
             down_height
         ),
+
         interpolation=cv2.INTER_AREA
+
     )
 
 
-    # --------------------------------------------------------
-    # Atmospheric light
-    # --------------------------------------------------------
+    # ========================================================
+    # ATMOSPHERIC LIGHT
+    # ========================================================
 
-    AF, AN, _, _ = (
-        estimate_atmospheric_light(
-            image_down,
-            params.patch_size,
-            th_ref=None
-        )
+    (
+        AF,
+        AN,
+        _,
+        _
+    ) = estimate_atmospheric_light(
+
+        image_down,
+
+        params.patch_size,
+
+        th_ref=None
+
     )
 
 
-    # --------------------------------------------------------
-    # Pixel-wise atmospheric light
-    # --------------------------------------------------------
+    # ========================================================
+    # PIXEL-WISE ATMOSPHERIC LIGHT
+    # ========================================================
 
     atmospheric_light = (
+
         pixelwise_atmospheric_light(
+
             hazy,
+
             AF,
+
             AN
+
         )
+
     )
 
 
-    # --------------------------------------------------------
-    # Pixel-wise transmission
-    # --------------------------------------------------------
+    # ========================================================
+    # TRANSMISSION
+    # ========================================================
 
     transmission = (
+
         pixelwise_transmission(
+
             hazy,
+
             atmospheric_light,
+
             omega=params.omega,
+
             gamma=gamma,
+
             t_min=params.t_min
+
         )
+
     )
 
 
-    # --------------------------------------------------------
-    # Scene recovery
-    # --------------------------------------------------------
+    # ========================================================
+    # SCENE RECOVERY
+    # ========================================================
 
     dehazed = (
+
         scene_dehazing(
+
             hazy,
+
             atmospheric_light,
+
             transmission
+
         )
+
     )
 
 
-    # --------------------------------------------------------
-    # Final range protection
-    # --------------------------------------------------------
+    # ========================================================
+    # RANGE PROTECTION
+    # ========================================================
 
     dehazed = np.clip(
+
         dehazed,
+
         0.0,
+
         1.0
+
     ).astype(
+
         np.float32
+
     )
 
 
     return (
+
         dehazed,
+
         atmospheric_light,
+
         transmission
+
     )
 
 
@@ -419,23 +669,48 @@ def dehaze_with_gamma(
 
 def main():
 
-    print("=" * 70)
-    print("              GAMMA ABLATION STUDY")
-    print("=" * 70)
+    print()
+    print(
+        "=" * 70
+    )
+
+    print(
+        "                  GAMMA ABLATION STUDY"
+    )
+
+    print(
+        "=" * 70
+    )
+
 
     print()
-    print("Hazy directory:")
-    print(HAZY_DIR)
+    print(
+        "Hazy directory:"
+    )
+
+    print(
+        HAZY_DIR
+    )
+
 
     print()
-    print("Ground-truth directory:")
-    print(GT_DIR)
+    print(
+        "Ground-truth directory:"
+    )
+
+    print(
+        GT_DIR
+    )
+
 
     print()
-    print("Output directory:")
-    print(ABLATION_DIR)
+    print(
+        "Output directory:"
+    )
 
-    print()
+    print(
+        ABLATION_DIR
+    )
 
 
     # ========================================================
@@ -443,8 +718,11 @@ def main():
     # ========================================================
 
     ABLATION_DIR.mkdir(
+
         parents=True,
+
         exist_ok=True
+
     )
 
 
@@ -454,9 +732,13 @@ def main():
 
     if not HAZY_DIR.exists():
 
+        print()
         print(
-            f"[ERROR] Hazy directory does not exist:\n"
-            f"{HAZY_DIR}"
+            "[ERROR] Hazy directory does not exist:"
+        )
+
+        print(
+            HAZY_DIR
         )
 
         return
@@ -464,50 +746,81 @@ def main():
 
     if not GT_DIR.exists():
 
+        print()
         print(
-            f"[ERROR] Ground-truth directory does not exist:\n"
-            f"{GT_DIR}"
+            "[ERROR] Ground-truth directory does not exist:"
+        )
+
+        print(
+            GT_DIR
         )
 
         return
 
 
     # ========================================================
-    # GET IMAGE FILES
+    # FIND HAZY FILES
     # ========================================================
 
     hazy_files = sorted(
 
-        p
-        for p in HAZY_DIR.iterdir()
+        [
 
-        if (
-            p.is_file()
-            and
-            p.suffix.lower()
-            in IMAGE_EXTENSIONS
-        )
+            path
+
+            for path
+            in
+            HAZY_DIR.iterdir()
+
+            if (
+
+                path.is_file()
+
+                and
+
+                path.suffix.lower()
+                in
+                IMAGE_EXTENSIONS
+
+            )
+
+        ]
+
     )
 
+
+    # ========================================================
+    # FIND GT FILES
+    # ========================================================
 
     gt_files = sorted(
 
-        p
-        for p in GT_DIR.iterdir()
+        [
 
-        if (
-            p.is_file()
-            and
-            p.suffix.lower()
-            in IMAGE_EXTENSIONS
-        )
+            path
+
+            for path
+            in
+            GT_DIR.iterdir()
+
+            if (
+
+                path.is_file()
+
+                and
+
+                path.suffix.lower()
+                in
+                IMAGE_EXTENSIONS
+
+            )
+
+        ]
+
     )
 
 
-    # ========================================================
-    # CHECK IMAGE COUNTS
-    # ========================================================
-
+    print()
     print(
         f"Found {len(hazy_files)} hazy images."
     )
@@ -515,8 +828,6 @@ def main():
     print(
         f"Found {len(gt_files)} ground-truth images."
     )
-
-    print()
 
 
     if not hazy_files:
@@ -538,66 +849,88 @@ def main():
 
 
     # ========================================================
-    # STORE RESULTS
+    # RESULT STORAGE
     # ========================================================
 
     rows = []
 
 
     # ========================================================
-    # LOOP THROUGH GAMMA VALUES
+    # GAMMA LOOP
     # ========================================================
 
     for gamma in GAMMAS:
 
         print()
-        print("-" * 70)
+        print(
+            "-" * 70
+        )
+
         print(
             f"Testing gamma = {gamma}"
         )
-        print("-" * 70)
+
+        print(
+            "-" * 70
+        )
 
 
-        # ----------------------------------------------------
-        # Load default parameters
-        # ----------------------------------------------------
+        # ====================================================
+        # LOAD PARAMETERS
+        # ====================================================
 
         params = (
             default_dehaze_params()
         )
 
 
-        # ----------------------------------------------------
-        # Set gamma
-        # ----------------------------------------------------
+        # ====================================================
+        # SET GAMMA
+        # ====================================================
 
-        params.gamma = gamma
+        params.gamma = (
+            gamma
+        )
 
 
-        # ----------------------------------------------------
-        # Metric storage
-        # ----------------------------------------------------
+        # ====================================================
+        # METRIC STORAGE
+        # ====================================================
 
         psnr_values = []
+
         ssim_values = []
+
         fsim_values = []
+
         scielab_values = []
+
         epi_values = []
+
         edge_ret_values = []
 
 
-        # ----------------------------------------------------
-        # Output directory for this gamma
-        # ----------------------------------------------------
+        # ====================================================
+        # OUTPUT DIRECTORY
+        # ====================================================
 
         out_dir = (
+
             ABLATION_DIR
-            / f"gamma_{gamma:.1f}"
+
+            /
+
+            f"gamma_{gamma:.1f}"
+
         )
 
+
         out_dir.mkdir(
+
             parents=True,
+
             exist_ok=True
+
         )
 
 
@@ -606,183 +939,352 @@ def main():
         # ====================================================
 
         for index, hazy_path in enumerate(
+
             hazy_files,
+
             start=1
+
         ):
 
+            print()
+
             print(
+
                 f"[{index}/{len(hazy_files)}] "
                 f"{hazy_path.name}"
+
             )
 
 
-            # ------------------------------------------------
-            # Find GT
-            # ------------------------------------------------
+            # =================================================
+            # FIND GT
+            # =================================================
 
             gt_path = find_gt(
+
                 hazy_path,
+
                 gt_files
+
             )
 
 
             if gt_path is None:
 
                 print(
-                    f"    [SKIP] "
-                    f"No GT found for "
-                    f"{hazy_path.name}"
+
+                    "    [SKIP] "
+                    "No ground truth found."
+
                 )
 
                 continue
 
 
             print(
-                f"    GT: {gt_path.name}"
+
+                f"    GT: "
+                f"{gt_path.name}"
+
             )
 
 
-            # ------------------------------------------------
-            # Read images
-            # ------------------------------------------------
-
-            hazy = read_rgb(
-                hazy_path
-            )
-
-            gt = read_rgb(
-                gt_path
-            )
-
-
-            # ------------------------------------------------
-            # Dehaze using current gamma
-            # ------------------------------------------------
+            # =================================================
+            # READ IMAGES
+            # =================================================
 
             try:
 
-                pred, A, transmission = (
-                    dehaze_with_gamma(
-                        hazy,
-                        gamma,
-                        params
-                    )
+                hazy = read_rgb(
+                    hazy_path
+                )
+
+                gt = read_rgb(
+                    gt_path
                 )
 
             except Exception as exc:
 
                 print(
+
                     f"    [ERROR] "
-                    f"Dehazing failed: {exc}"
+                    f"Image loading failed: "
+                    f"{exc}"
+
                 )
 
                 continue
 
 
-            # ------------------------------------------------
-            # Match GT size
-            # ------------------------------------------------
+            # =================================================
+            # DEHAZE
+            # =================================================
+
+            try:
+
+                (
+
+                    pred,
+
+                    atmospheric_light,
+
+                    transmission
+
+                ) = dehaze_with_gamma(
+
+                    hazy,
+
+                    gamma,
+
+                    params
+
+                )
+
+            except Exception as exc:
+
+                print(
+
+                    f"    [ERROR] "
+                    f"Dehazing failed: "
+                    f"{exc}"
+
+                )
+
+                continue
+
+
+            # =================================================
+            # MATCH GT SIZE
+            # =================================================
 
             if (
+
                 gt.shape[:2]
                 !=
                 pred.shape[:2]
+
             ):
 
-                gt = cv2.resize(
+                gt_pil = Image.fromarray(
 
-                    gt,
+                    rgb_to_uint8(
+                        gt
+                    ),
+
+                    mode="RGB"
+
+                )
+
+                gt_pil = gt_pil.resize(
 
                     (
                         pred.shape[1],
                         pred.shape[0]
                     ),
 
-                    interpolation=cv2.INTER_AREA
+                    Image.Resampling.LANCZOS
+
+                )
+
+                gt = (
+
+                    np.asarray(
+                        gt_pil,
+                        dtype=np.uint8
+                    )
+                    .astype(
+                        np.float32
+                    )
+                    /
+                    255.0
+
                 )
 
 
-            # ------------------------------------------------
-            # Convert to uint8 for evaluation
-            # ------------------------------------------------
+            # =================================================
+            # RGB UINT8
+            # =================================================
 
             pred_uint8 = (
-                np.clip(
-                    pred * 255.0,
-                    0,
-                    255
+                rgb_to_uint8(
+                    pred
                 )
-                .astype(np.uint8)
             )
-
 
             gt_uint8 = (
-                np.clip(
-                    gt * 255.0,
-                    0,
-                    255
+                rgb_to_uint8(
+                    gt
                 )
-                .astype(np.uint8)
             )
 
-
-            # =================================================
-            # PSNR + SSIM
-            # =================================================
-
-            basic = (
-                calculate_basic_metrics(
-                    pred_uint8,
-                    gt_uint8
+            hazy_uint8 = (
+                rgb_to_uint8(
+                    hazy
                 )
             )
 
 
-            psnr = basic["psnr"]
+            # =================================================
+            # BASIC METRICS
+            # =================================================
 
-            ssim = basic["ssim"]
+            try:
+
+                basic = (
+
+                    calculate_basic_metrics(
+
+                        pred_uint8,
+
+                        gt_uint8
+
+                    )
+
+                )
+
+                psnr = (
+                    basic["psnr"]
+                )
+
+                ssim = (
+                    basic["ssim"]
+                )
+
+            except Exception as exc:
+
+                print(
+
+                    f"    [ERROR] "
+                    f"PSNR/SSIM failed: "
+                    f"{exc}"
+
+                )
+
+                continue
 
 
             # =================================================
             # FSIM
             # =================================================
 
-            fsim = calculate_fsim(
-                pred_uint8,
-                gt_uint8
-            )
+            try:
+
+                fsim = float(
+
+                    calculate_fsim(
+
+                        pred_uint8,
+
+                        gt_uint8
+
+                    )
+
+                )
+
+            except Exception as exc:
+
+                print(
+
+                    f"    [ERROR] "
+                    f"FSIM failed: "
+                    f"{exc}"
+
+                )
+
+                continue
 
 
             # =================================================
             # S-CIELAB
             # =================================================
 
-            scielab = calculate_scielab(
-                pred_uint8,
-                gt_uint8
-            )
+            try:
+
+                scielab = float(
+
+                    calculate_scielab(
+
+                        pred_uint8,
+
+                        gt_uint8
+
+                    )
+
+                )
+
+            except Exception as exc:
+
+                print(
+
+                    f"    [ERROR] "
+                    f"S-CIELAB failed: "
+                    f"{exc}"
+
+                )
+
+                continue
 
 
             # =================================================
             # EPI
             # =================================================
 
-            epi = calculate_epi(
-                pred_uint8,
-                gt_uint8
-            )
+            try:
+
+                epi = float(
+
+                    calculate_epi(
+
+                        pred_uint8,
+
+                        gt_uint8
+
+                    )
+
+                )
+
+            except Exception as exc:
+
+                print(
+
+                    f"    [ERROR] "
+                    f"EPI failed: "
+                    f"{exc}"
+
+                )
+
+                continue
 
 
             # =================================================
             # EDGE RETENTION
             # =================================================
 
-            edge_retention = (
-                edge_preservation_proxy(
-                    hazy_uint8_from_rgb(hazy),
-                    pred_uint8
+            try:
+
+                edge_retention = float(
+
+                    edge_preservation_proxy(
+
+                        hazy_uint8,
+
+                        pred_uint8
+
+                    )
+
                 )
-            )
+
+            except Exception as exc:
+
+                print(
+
+                    f"    [WARNING] "
+                    f"Edge retention failed: "
+                    f"{exc}"
+
+                )
+
+                edge_retention = np.nan
 
 
             # =================================================
@@ -819,126 +1321,246 @@ def main():
             # =================================================
 
             output_path = (
+
                 out_dir
-                / f"{hazy_path.stem}_dehazed.png"
+
+                /
+
+                f"{hazy_path.stem}_dehazed.png"
+
             )
+
 
             save_rgb(
+
                 output_path,
+
                 pred
+
             )
 
 
-            print(
-                f"    PSNR={psnr:.2f} dB | "
-                f"SSIM={ssim:.4f} | "
-                f"FSIM={fsim:.4f} | "
-                f"S-CIELAB={scielab:.4f} | "
-                f"EPI={epi:.4f}"
-            )
-
-
-        # ====================================================
-        # AVERAGE RESULTS
-        # ====================================================
-
-        if psnr_values:
-
-            row = {
-
-                "gamma":
-                    gamma,
-
-                "n_images":
-                    len(psnr_values),
-
-                "Average_PSNR_dB":
-                    float(
-                        np.mean(
-                            psnr_values
-                        )
-                    ),
-
-                "Average_SSIM":
-                    float(
-                        np.mean(
-                            ssim_values
-                        )
-                    ),
-
-                "Average_FSIM":
-                    float(
-                        np.mean(
-                            fsim_values
-                        )
-                    ),
-
-                "Average_S_CIELAB_DeltaE":
-                    float(
-                        np.mean(
-                            scielab_values
-                        )
-                    ),
-
-                "Average_EPI":
-                    float(
-                        np.mean(
-                            epi_values
-                        )
-                    ),
-
-                "Average_Edge_Retention":
-                    float(
-                        np.mean(
-                            edge_ret_values
-                        )
-                    )
-            }
-
-
-            rows.append(
-                row
-            )
-
-
-            # ------------------------------------------------
-            # Print gamma summary
-            # ------------------------------------------------
+            # =================================================
+            # PRINT IMAGE RESULTS
+            # =================================================
 
             print()
+
             print(
-                f"Gamma {gamma:.1f} SUMMARY"
+
+                f"    PSNR       : "
+                f"{psnr:.4f} dB"
+
             )
 
             print(
-                f"Average PSNR : "
-                f"{row['Average_PSNR_dB']:.4f} dB"
+
+                f"    SSIM       : "
+                f"{ssim:.4f}"
+
             )
 
             print(
-                f"Average SSIM : "
-                f"{row['Average_SSIM']:.4f}"
+
+                f"    FSIM       : "
+                f"{fsim:.4f}"
+
             )
 
             print(
-                f"Average FSIM : "
-                f"{row['Average_FSIM']:.4f}"
+
+                f"    S-CIELAB   : "
+                f"{scielab:.4f}"
+
             )
 
             print(
-                f"Average S-CIELAB ΔE : "
-                f"{row['Average_S_CIELAB_DeltaE']:.4f}"
+
+                f"    EPI        : "
+                f"{epi:.4f}"
+
             )
 
             print(
-                f"Average EPI : "
-                f"{row['Average_EPI']:.4f}"
+
+                f"    Edge Ret.  : "
+                f"{edge_retention:.4f}"
+
             )
 
+
+        # ====================================================
+        # GAMMA AVERAGE
+        # ====================================================
+
+        if not psnr_values:
+
+            print()
+
             print(
-                f"Average Edge Retention : "
-                f"{row['Average_Edge_Retention']:.4f}"
+
+                f"[WARNING] "
+                f"No images evaluated for gamma "
+                f"{gamma}."
+
             )
+
+            continue
+
+
+        # ====================================================
+        # SAFE EDGE AVERAGE
+        # ====================================================
+
+        valid_edge_values = [
+
+            value
+
+            for value
+            in
+            edge_ret_values
+
+            if np.isfinite(
+                value
+            )
+
+        ]
+
+
+        if valid_edge_values:
+
+            average_edge_retention = float(
+
+                np.mean(
+                    valid_edge_values
+                )
+
+            )
+
+        else:
+
+            average_edge_retention = np.nan
+
+
+        # ====================================================
+        # RESULT ROW
+        # ====================================================
+
+        row = {
+
+            "gamma":
+                gamma,
+
+            "n_images":
+                len(psnr_values),
+
+            "Average_PSNR_dB":
+                float(
+                    np.mean(
+                        psnr_values
+                    )
+                ),
+
+            "Average_SSIM":
+                float(
+                    np.mean(
+                        ssim_values
+                    )
+                ),
+
+            "Average_FSIM":
+                float(
+                    np.mean(
+                        fsim_values
+                    )
+                ),
+
+            "Average_S_CIELAB_DeltaE":
+                float(
+                    np.mean(
+                        scielab_values
+                    )
+                ),
+
+            "Average_EPI":
+                float(
+                    np.mean(
+                        epi_values
+                    )
+                ),
+
+            "Average_Edge_Retention":
+                average_edge_retention
+
+        }
+
+
+        rows.append(
+            row
+        )
+
+
+        # ====================================================
+        # PRINT GAMMA SUMMARY
+        # ====================================================
+
+        print()
+
+        print(
+            "=" * 70
+        )
+
+        print(
+            f"GAMMA {gamma:.1f} SUMMARY"
+        )
+
+        print(
+            "=" * 70
+        )
+
+        print()
+
+        print(
+
+            f"Average PSNR          : "
+            f"{row['Average_PSNR_dB']:.6f} dB"
+
+        )
+
+        print(
+
+            f"Average SSIM          : "
+            f"{row['Average_SSIM']:.6f}"
+
+        )
+
+        print(
+
+            f"Average FSIM          : "
+            f"{row['Average_FSIM']:.6f}"
+
+        )
+
+        print(
+
+            f"Average S-CIELAB     : "
+            f"{row['Average_S_CIELAB_DeltaE']:.6f}"
+
+        )
+
+        print(
+
+            f"Average EPI           : "
+            f"{row['Average_EPI']:.6f}"
+
+        )
+
+        print(
+
+            f"Average Edge Retention: "
+            f"{row['Average_Edge_Retention']:.6f}"
+
+        )
 
 
     # ========================================================
@@ -948,16 +1570,19 @@ def main():
     if not rows:
 
         print()
+
         print(
+
             "[ERROR] "
             "No gamma values could be evaluated."
+
         )
 
         return
 
 
     # ========================================================
-    # CREATE DATAFRAME
+    # DATAFRAME
     # ========================================================
 
     df = pd.DataFrame(
@@ -966,58 +1591,94 @@ def main():
 
 
     # ========================================================
-    # SAVE CSV
+    # CSV
     # ========================================================
 
     csv_path = (
+
         ABLATION_DIR
-        / "gamma_ablation_results.csv"
+
+        /
+        "gamma_ablation_results.csv"
+
     )
 
+
     df.to_csv(
+
         csv_path,
+
         index=False
+
     )
 
 
     # ========================================================
-    # SAVE EXCEL
+    # EXCEL
     # ========================================================
 
     xlsx_path = (
+
         ABLATION_DIR
-        / "gamma_ablation_results.xlsx"
+
+        /
+        "gamma_ablation_results.xlsx"
+
     )
+
 
     try:
 
         df.to_excel(
+
             xlsx_path,
+
             index=False
+
         )
 
         print()
+
         print(
-            f"Excel saved: {xlsx_path}"
+
+            f"Excel saved:"
+        )
+
+        print(
+            xlsx_path
         )
 
     except Exception as exc:
 
+        print()
+
         print(
-            f"Excel export skipped: {exc}"
+
+            f"Excel export skipped: "
+            f"{exc}"
+
         )
 
 
     # ========================================================
-    # PRINT FINAL TABLE
+    # FINAL TABLE
     # ========================================================
 
     print()
-    print("=" * 70)
+
     print(
-        "FINAL GAMMA ABLATION RESULTS"
+        "=" * 70
     )
-    print("=" * 70)
+
+    print(
+        "              FINAL GAMMA ABLATION RESULTS"
+    )
+
+    print(
+        "=" * 70
+    )
+
+    print()
 
     print(
         df.to_string(
@@ -1027,219 +1688,164 @@ def main():
 
 
     # ========================================================
-    # PSNR GRAPH
+    # GRAPH HELPER
     # ========================================================
 
-    fig, ax = plt.subplots(
-        figsize=(7, 5)
-    )
+    def save_bar_graph(
+        column,
+        ylabel,
+        title,
+        filename
+    ):
 
-    ax.bar(
-        df["gamma"].astype(str),
-        df["Average_PSNR_dB"]
-    )
+        fig, ax = plt.subplots(
 
-    ax.set_xlabel(
-        "Transmission Gamma"
-    )
+            figsize=(
+                7,
+                5
+            )
 
-    ax.set_ylabel(
-        "Average PSNR (dB)"
-    )
+        )
 
-    ax.set_title(
-        "Gamma Ablation: PSNR"
-    )
+        ax.bar(
 
-    fig.tight_layout()
+            df["gamma"].astype(
+                str
+            ),
 
-    fig.savefig(
-        ABLATION_DIR
-        / "gamma_vs_psnr.png",
-        dpi=200
-    )
+            df[column]
 
-    plt.close(fig)
+        )
 
+        ax.set_xlabel(
+            "Transmission Gamma"
+        )
 
-    # ========================================================
-    # SSIM GRAPH
-    # ========================================================
+        ax.set_ylabel(
+            ylabel
+        )
 
-    fig, ax = plt.subplots(
-        figsize=(7, 5)
-    )
+        ax.set_title(
+            title
+        )
 
-    ax.bar(
-        df["gamma"].astype(str),
-        df["Average_SSIM"]
-    )
+        fig.tight_layout()
 
-    ax.set_xlabel(
-        "Transmission Gamma"
-    )
+        fig.savefig(
 
-    ax.set_ylabel(
-        "Average SSIM"
-    )
+            ABLATION_DIR
+            /
+            filename,
 
-    ax.set_title(
-        "Gamma Ablation: SSIM"
-    )
+            dpi=200
 
-    fig.tight_layout()
+        )
 
-    fig.savefig(
-        ABLATION_DIR
-        / "gamma_vs_ssim.png",
-        dpi=200
-    )
-
-    plt.close(fig)
+        plt.close(
+            fig
+        )
 
 
     # ========================================================
-    # FSIM GRAPH
+    # PSNR
     # ========================================================
 
-    fig, ax = plt.subplots(
-        figsize=(7, 5)
+    save_bar_graph(
+
+        "Average_PSNR_dB",
+
+        "Average PSNR (dB)",
+
+        "Gamma Ablation: PSNR",
+
+        "gamma_vs_psnr.png"
+
     )
-
-    ax.bar(
-        df["gamma"].astype(str),
-        df["Average_FSIM"]
-    )
-
-    ax.set_xlabel(
-        "Transmission Gamma"
-    )
-
-    ax.set_ylabel(
-        "Average FSIM"
-    )
-
-    ax.set_title(
-        "Gamma Ablation: FSIM"
-    )
-
-    fig.tight_layout()
-
-    fig.savefig(
-        ABLATION_DIR
-        / "gamma_vs_fsim.png",
-        dpi=200
-    )
-
-    plt.close(fig)
 
 
     # ========================================================
-    # EPI GRAPH
+    # SSIM
     # ========================================================
 
-    fig, ax = plt.subplots(
-        figsize=(7, 5)
+    save_bar_graph(
+
+        "Average_SSIM",
+
+        "Average SSIM",
+
+        "Gamma Ablation: SSIM",
+
+        "gamma_vs_ssim.png"
+
     )
-
-    ax.bar(
-        df["gamma"].astype(str),
-        df["Average_EPI"]
-    )
-
-    ax.set_xlabel(
-        "Transmission Gamma"
-    )
-
-    ax.set_ylabel(
-        "Average EPI"
-    )
-
-    ax.set_title(
-        "Gamma Ablation: Edge Preservation Index"
-    )
-
-    fig.tight_layout()
-
-    fig.savefig(
-        ABLATION_DIR
-        / "gamma_vs_epi.png",
-        dpi=200
-    )
-
-    plt.close(fig)
 
 
     # ========================================================
-    # S-CIELAB GRAPH
+    # FSIM
     # ========================================================
 
-    fig, ax = plt.subplots(
-        figsize=(7, 5)
+    save_bar_graph(
+
+        "Average_FSIM",
+
+        "Average FSIM",
+
+        "Gamma Ablation: FSIM",
+
+        "gamma_vs_fsim.png"
+
     )
-
-    ax.bar(
-        df["gamma"].astype(str),
-        df["Average_S_CIELAB_DeltaE"]
-    )
-
-    ax.set_xlabel(
-        "Transmission Gamma"
-    )
-
-    ax.set_ylabel(
-        "Average S-CIELAB ΔE"
-    )
-
-    ax.set_title(
-        "Gamma Ablation: S-CIELAB"
-    )
-
-    fig.tight_layout()
-
-    fig.savefig(
-        ABLATION_DIR
-        / "gamma_vs_scielab.png",
-        dpi=200
-    )
-
-    plt.close(fig)
 
 
     # ========================================================
-    # EDGE RETENTION GRAPH
+    # EPI
     # ========================================================
 
-    fig, ax = plt.subplots(
-        figsize=(7, 5)
+    save_bar_graph(
+
+        "Average_EPI",
+
+        "Average EPI",
+
+        "Gamma Ablation: Edge Preservation Index",
+
+        "gamma_vs_epi.png"
+
     )
 
-    ax.bar(
-        df["gamma"].astype(str),
-        df["Average_Edge_Retention"]
+
+    # ========================================================
+    # S-CIELAB
+    # ========================================================
+
+    save_bar_graph(
+
+        "Average_S_CIELAB_DeltaE",
+
+        "Average S-CIELAB ΔE",
+
+        "Gamma Ablation: S-CIELAB",
+
+        "gamma_vs_scielab.png"
+
     )
 
-    ax.set_xlabel(
-        "Transmission Gamma"
+
+    # ========================================================
+    # EDGE RETENTION
+    # ========================================================
+
+    save_bar_graph(
+
+        "Average_Edge_Retention",
+
+        "Average Edge Retention",
+
+        "Gamma Ablation: Edge Retention",
+
+        "gamma_vs_edge_retention.png"
+
     )
-
-    ax.set_ylabel(
-        "Average Edge Retention"
-    )
-
-    ax.set_title(
-        "Gamma Ablation: Edge Retention"
-    )
-
-    fig.tight_layout()
-
-    fig.savefig(
-        ABLATION_DIR
-        / "gamma_vs_edge_retention.png",
-        dpi=200
-    )
-
-    plt.close(fig)
 
 
     # ========================================================
@@ -1247,42 +1853,47 @@ def main():
     # ========================================================
 
     print()
-    print("=" * 70)
+
+    print(
+        "=" * 70
+    )
+
     print(
         "Gamma ablation completed successfully."
     )
-    print("=" * 70)
+
+    print(
+        "=" * 70
+    )
 
     print()
+
     print(
-        f"CSV   : {csv_path}"
+        f"CSV:"
     )
 
     print(
-        f"Excel : {xlsx_path}"
+        csv_path
+    )
+
+    print()
+
+    print(
+        f"Excel:"
     )
 
     print(
-        f"Graphs: {ABLATION_DIR}"
+        xlsx_path
     )
 
+    print()
 
-# ============================================================
-# HELPER
-# ============================================================
+    print(
+        f"Graphs:"
+    )
 
-def hazy_uint8_from_rgb(image):
-    """
-    Convert RGB float [0,1] -> RGB uint8.
-    """
-
-    return (
-        np.clip(
-            image * 255.0,
-            0,
-            255
-        )
-        .astype(np.uint8)
+    print(
+        ABLATION_DIR
     )
 
 

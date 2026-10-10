@@ -2,90 +2,129 @@ import cv2
 import numpy as np
 
 
-def calculate_epi(dehazed, ground_truth):
+# ============================================================
+# RGB -> GRAY
+# ============================================================
+
+def rgb_to_gray(
+    image
+):
+
+    image = image.astype(
+        np.float32
+    )
+
+    if image.max() > 1.0:
+
+        image = image / 255.0
+
+    gray = (
+        0.299 * image[:, :, 0]
+        +
+        0.587 * image[:, :, 1]
+        +
+        0.114 * image[:, :, 2]
+    )
+
+    return gray
+
+
+# ============================================================
+# EPI
+# ============================================================
+
+def calculate_epi(
+    output_rgb,
+    ground_truth_rgb
+):
     """
-    Calculate Edge Preservation Index (EPI).
+    Edge Preservation Index.
 
-    Higher value means better preservation of
-    ground-truth edge structure.
+    Compares edge structures between:
+        dehazed output
+        ground truth
+
+    Higher is better.
     """
 
-    # Match image size
-    if dehazed.shape[:2] != ground_truth.shape[:2]:
+    output_gray = rgb_to_gray(
+        output_rgb
+    )
 
-        dehazed = cv2.resize(
-            dehazed,
-            (ground_truth.shape[1], ground_truth.shape[0]),
-            interpolation=cv2.INTER_LINEAR
+    gt_gray = rgb_to_gray(
+        ground_truth_rgb
+    )
+
+    output_x = cv2.Sobel(
+        output_gray,
+        cv2.CV_32F,
+        1,
+        0,
+        ksize=3
+    )
+
+    output_y = cv2.Sobel(
+        output_gray,
+        cv2.CV_32F,
+        0,
+        1,
+        ksize=3
+    )
+
+    gt_x = cv2.Sobel(
+        gt_gray,
+        cv2.CV_32F,
+        1,
+        0,
+        ksize=3
+    )
+
+    gt_y = cv2.Sobel(
+        gt_gray,
+        cv2.CV_32F,
+        0,
+        1,
+        ksize=3
+    )
+
+    output_gradient = np.sqrt(
+        output_x ** 2
+        +
+        output_y ** 2
+    )
+
+    gt_gradient = np.sqrt(
+        gt_x ** 2
+        +
+        gt_y ** 2
+    )
+
+    numerator = np.sum(
+        output_gradient
+        *
+        gt_gradient
+    )
+
+    denominator = np.sqrt(
+        np.sum(
+            output_gradient ** 2
         )
-
-    # Convert RGB images to grayscale
-    dehazed_gray = cv2.cvtColor(
-        dehazed,
-        cv2.COLOR_RGB2GRAY
-    ).astype(np.float32)
-
-    gt_gray = cv2.cvtColor(
-        ground_truth,
-        cv2.COLOR_RGB2GRAY
-    ).astype(np.float32)
-
-    # Sobel gradient for dehazed image
-    dx_d = cv2.Sobel(
-        dehazed_gray,
-        cv2.CV_32F,
-        1,
-        0,
-        ksize=3
+        *
+        np.sum(
+            gt_gradient ** 2
+        )
     )
 
-    dy_d = cv2.Sobel(
-        dehazed_gray,
-        cv2.CV_32F,
-        0,
-        1,
-        ksize=3
-    )
+    if denominator <= 1e-12:
 
-    edge_dehazed = np.sqrt(
-        dx_d ** 2 +
-        dy_d ** 2
-    )
-
-    # Sobel gradient for ground truth
-    dx_gt = cv2.Sobel(
-        gt_gray,
-        cv2.CV_32F,
-        1,
-        0,
-        ksize=3
-    )
-
-    dy_gt = cv2.Sobel(
-        gt_gray,
-        cv2.CV_32F,
-        0,
-        1,
-        ksize=3
-    )
-
-    edge_gt = np.sqrt(
-        dx_gt ** 2 +
-        dy_gt ** 2
-    )
-
-    # Flatten arrays
-    edge_dehazed = edge_dehazed.flatten()
-    edge_gt = edge_gt.flatten()
-
-    # Prevent division problems if image has no edges
-    if np.std(edge_dehazed) == 0 or np.std(edge_gt) == 0:
         return 0.0
 
-    # Correlation between edge maps
-    epi = np.corrcoef(
-        edge_dehazed,
-        edge_gt
-    )[0, 1]
+    epi = numerator / denominator
 
-    return float(epi)
+    return float(
+        np.clip(
+            epi,
+            0.0,
+            1.0
+        )
+    )

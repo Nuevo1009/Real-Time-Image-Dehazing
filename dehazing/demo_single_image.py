@@ -1,39 +1,57 @@
 """
-Run the complete dehazing algorithm on one image
-and display the result.
+Run the complete RGB-only dehazing algorithm on one image,
+calculate PSNR, SSIM, FSIM, EPI and residual, and display
+the results.
 """
 
 from pathlib import Path
 import time
 import sys
 
-import cv2
 import numpy as np
 import matplotlib.pyplot as plt
+from PIL import Image
 
 
 # ============================================================
 # PROJECT DIRECTORY
 # ============================================================
 
-PROJECT_DIR = Path(__file__).resolve().parent.parent
+PROJECT_DIR = (
+    Path(__file__)
+    .resolve()
+    .parent
+    .parent
+)
 
 
 # ============================================================
-# DEHAZING DIRECTORY
+# IMPORT PROJECT
 # ============================================================
 
-DEHAZING_DIR = PROJECT_DIR / "dehazing"
+if str(PROJECT_DIR) not in sys.path:
 
-if str(DEHAZING_DIR) not in sys.path:
-    sys.path.insert(0, str(DEHAZING_DIR))
+    sys.path.insert(
+        0,
+        str(PROJECT_DIR)
+    )
 
 
 # ============================================================
-# IMPORT DEHAZING MODULE
+# IMPORT DEHAZING
 # ============================================================
 
-import adaptive_transmission_dehaze as dehaze_module
+from dehazing.adaptive_transmission_dehaze import (
+    adaptive_dehaze
+)
+
+from dehazing.default_dehaze_params import (
+    DehazeParams
+)
+
+from dehazing.evaluation_metrics import (
+    calculate_all_metrics
+)
 
 
 # ============================================================
@@ -46,7 +64,21 @@ INPUT_IMAGE = (
     / "CNN_Dataset"
     / "test"
     / "hazy"
-    / "0058_0.8_0.2.jpg"
+    / "0024_0.85_0.08.jpg"
+)
+
+
+# ============================================================
+# GROUND TRUTH / CLEAR IMAGE
+# ============================================================
+
+GROUND_TRUTH_IMAGE = (
+    PROJECT_DIR
+    / "dataset"
+    / "CNN_Dataset"
+    / "test"
+    / "clear"
+    / "0024_0.85_0.08.jpg"
 )
 
 
@@ -57,136 +89,134 @@ INPUT_IMAGE = (
 OUTPUT_IMAGE = (
     PROJECT_DIR
     / "output"
-    / "demo_dehazed.png"
+    / "demo_dehazed_rgb_T.png"
 )
 
 
 # ============================================================
-# READ IMAGE
+# RESIDUAL OUTPUT
 # ============================================================
 
-def read_image(path):
-    """
-    Read image in the format expected by adaptive_dehaze().
+RESIDUAL_IMAGE = (
+    PROJECT_DIR
+    / "output"
+    / "residual_rgb_T.png"
+)
 
-    OpenCV reads images as:
-        BGR
-        uint8
-        range [0, 255]
+
+# ============================================================
+# READ RGB IMAGE
+# ============================================================
+
+def read_image(
+    path
+):
+    """
+    Read image directly as RGB.
+
+    PIL guarantees:
+
+        channel 0 = R
+        channel 1 = G
+        channel 2 = B
+
+    No BGR/RGB conversion.
     """
 
-    image = cv2.imread(
-        str(path),
-        cv2.IMREAD_COLOR
+    image = Image.open(
+        path
+    ).convert(
+        "RGB"
     )
 
-    if image is None:
-
-        raise RuntimeError(
-            f"Could not read image:\n{path}"
-        )
+    image = np.array(
+        image,
+        dtype=np.uint8
+    )
 
     return image
 
 
 # ============================================================
-# CONVERT IMAGE FOR DISPLAY
+# PREPARE FOR DISPLAY
 # ============================================================
 
-def prepare_for_display(image):
+def prepare_for_display(
+    image
+):
     """
-    Convert an image to RGB format in [0, 1]
-    for matplotlib.
-    """
+    Prepare an already-RGB image for matplotlib.
 
-    image = np.asarray(image)
-
-    # --------------------------------------------------------
-    # FLOAT IMAGE
-    # --------------------------------------------------------
-
-    if np.issubdtype(
-        image.dtype,
-        np.floating
-    ):
-
-        image = np.nan_to_num(
-            image
-        )
-
-        # If image is in [0, 1]
-        if image.max() <= 1.0:
-
-            image = (
-                np.clip(
-                    image,
-                    0.0,
-                    1.0
-                )
-                * 255.0
-            )
-
-        else:
-
-            image = np.clip(
-                image,
-                0.0,
-                255.0
-            )
-
-        image = image.astype(
-            np.uint8
-        )
-
-    # --------------------------------------------------------
-    # INTEGER IMAGE
-    # --------------------------------------------------------
-
-    else:
-
-        image = np.clip(
-            image,
-            0,
-            255
-        ).astype(
-            np.uint8
-        )
-
-
-    # --------------------------------------------------------
-    # BGR -> RGB
-    # --------------------------------------------------------
-
-    if image.ndim == 3:
-
-        image = cv2.cvtColor(
-            image,
-            cv2.COLOR_BGR2RGB
-        )
-
-    return (
-        image.astype(np.float32)
-        / 255.0
-    )
-
-
-# ============================================================
-# SAVE IMAGE
-# ============================================================
-
-def save_output(path, image):
-    """
-    Save dehazed output regardless of whether the
-    dehazing function returns uint8 or floating-point data.
+    No BGR/RGB conversion.
     """
 
     image = np.asarray(
         image
     )
 
-    # --------------------------------------------------------
-    # FLOAT OUTPUT
-    # --------------------------------------------------------
+    if np.issubdtype(
+        image.dtype,
+        np.floating
+    ):
+
+        image = np.nan_to_num(
+            image
+        )
+
+        if np.max(image) <= 1.0:
+
+            image = np.clip(
+                image,
+                0.0,
+                1.0
+            )
+
+        else:
+
+            image = (
+                np.clip(
+                    image,
+                    0.0,
+                    255.0
+                )
+                /
+                255.0
+            )
+
+    else:
+
+        image = (
+            np.clip(
+                image,
+                0,
+                255
+            )
+            /
+            255.0
+        )
+
+    return image.astype(
+        np.float32
+    )
+
+
+# ============================================================
+# SAVE RGB IMAGE
+# ============================================================
+
+def save_output(
+    path,
+    image
+):
+    """
+    Save RGB image using PIL.
+
+    No BGR conversion.
+    """
+
+    image = np.asarray(
+        image
+    )
 
     if np.issubdtype(
         image.dtype,
@@ -197,7 +227,7 @@ def save_output(path, image):
             image
         )
 
-        if image.max() <= 1.0:
+        if np.max(image) <= 1.0:
 
             image = (
                 np.clip(
@@ -205,7 +235,8 @@ def save_output(path, image):
                     0.0,
                     1.0
                 )
-                * 255.0
+                *
+                255.0
             )
 
         else:
@@ -216,10 +247,6 @@ def save_output(path, image):
                 255.0
             )
 
-    # --------------------------------------------------------
-    # INTEGER OUTPUT
-    # --------------------------------------------------------
-
     else:
 
         image = np.clip(
@@ -228,259 +255,75 @@ def save_output(path, image):
             255
         )
 
-
     image = image.astype(
         np.uint8
     )
 
-
-    # --------------------------------------------------------
-    # SAVE
-    # --------------------------------------------------------
+    path = Path(
+        path
+    )
 
     path.parent.mkdir(
         parents=True,
         exist_ok=True
     )
 
-    cv2.imwrite(
-        str(path),
-        image
+    Image.fromarray(
+        image,
+        mode="RGB"
+    ).save(
+        path
     )
 
 
 # ============================================================
-# GET DEHAZING FUNCTION
+# SAVE RESIDUAL
 # ============================================================
 
-def get_dehazing_function():
+def save_residual_image(
+    path,
+    residual
+):
+    """
+    Save residual image.
 
-    function = getattr(
-        dehaze_module,
-        "adaptive_dehaze",
-        None
+    Residual is in [0,1].
+    """
+
+    residual = np.asarray(
+        residual,
+        dtype=np.float32
     )
 
-    if not callable(function):
-
-        print(
-            "\n============================================"
-        )
-
-        print(
-            " ERROR: adaptive_dehaze() NOT FOUND"
-        )
-
-        print(
-            "============================================"
-        )
-
-        print(
-            "\nAvailable functions:"
-        )
-
-        for name in dir(
-            dehaze_module
-        ):
-
-            if name.startswith("_"):
-                continue
-
-            obj = getattr(
-                dehaze_module,
-                name
-            )
-
-            if callable(obj):
-
-                print(
-                    f"  - {name}"
-                )
-
-        raise ImportError(
-            "adaptive_dehaze() was not found."
-        )
-
-    return function
-
-
-# ============================================================
-# EXTRACT RESULT
-# ============================================================
-
-def extract_result(result):
-
-    dehazed_image = None
-    state = None
-    debug = {}
-
-    # --------------------------------------------------------
-    # TUPLE RESULT
-    # --------------------------------------------------------
-
-    if isinstance(
-        result,
-        tuple
-    ):
-
-        if len(result) >= 1:
-
-            dehazed_image = result[0]
-
-        if len(result) >= 2:
-
-            state = result[1]
-
-        if len(result) >= 3:
-
-            if isinstance(
-                result[2],
-                dict
-            ):
-
-                debug = result[2]
-
-    # --------------------------------------------------------
-    # IMAGE ONLY
-    # --------------------------------------------------------
-
-    else:
-
-        dehazed_image = result
-
-    return (
-        dehazed_image,
-        state,
-        debug
+    residual = np.clip(
+        residual,
+        0.0,
+        1.0
     )
 
-
-# ============================================================
-# PRINT DEBUG INFORMATION
-# ============================================================
-
-def print_debug_information(debug):
-
-    if not isinstance(
-        debug,
-        dict
-    ):
-
-        return
-
-
-    print(
-        "\n--------------------------------------------"
+    residual_uint8 = (
+        residual
+        *
+        255.0
+    ).round().astype(
+        np.uint8
     )
 
-    print(
-        " DEBUG INFORMATION"
+    path = Path(
+        path
     )
 
-    print(
-        "--------------------------------------------"
+    path.parent.mkdir(
+        parents=True,
+        exist_ok=True
     )
 
-
-    # --------------------------------------------------------
-    # AF
-    # --------------------------------------------------------
-
-    if "AF" in debug:
-
-        print(
-            f"Far AF           : "
-            f"{np.round(debug['AF'], 4)}"
-        )
-
-
-    # --------------------------------------------------------
-    # AN
-    # --------------------------------------------------------
-
-    if "AN" in debug:
-
-        print(
-            f"Near AN          : "
-            f"{np.round(debug['AN'], 4)}"
-        )
-
-
-    # --------------------------------------------------------
-    # THRESHOLD
-    # --------------------------------------------------------
-
-    if "Th" in debug:
-
-        print(
-            f"Threshold Th     : "
-            f"{debug['Th']:.4f}"
-        )
-
-
-    # --------------------------------------------------------
-    # TRANSMISSION
-    # --------------------------------------------------------
-
-    if "tm" in debug:
-
-        tm = np.asarray(
-            debug["tm"]
-        )
-
-        print(
-            f"Transmission     : "
-            f"["
-            f"{tm.min():.4f}, "
-            f"{tm.max():.4f}"
-            f"]"
-        )
-
-
-    # --------------------------------------------------------
-    # S-FCAE
-    # --------------------------------------------------------
-
-    if "sfcae_used_fallback" in debug:
-
-        if debug[
-            "sfcae_used_fallback"
-        ]:
-
-            print(
-                "S-FCAE           : "
-                "fallback to brightest-pixel rule"
-            )
-
-        else:
-
-            if (
-                "sfcae_sky_candidate_mask_far"
-                in debug
-            ):
-
-                count = np.count_nonzero(
-                    debug[
-                        "sfcae_sky_candidate_mask_far"
-                    ]
-                )
-
-                print(
-                    f"S-FCAE           : "
-                    f"{count} candidate pixels"
-                )
-
-
-    # --------------------------------------------------------
-    # POST GAMMA
-    # --------------------------------------------------------
-
-    if "post_gamma_value" in debug:
-
-        print(
-            f"Post gamma       : "
-            f"{debug['post_gamma_value']:.6f}"
-        )
+    Image.fromarray(
+        residual_uint8,
+        mode="RGB"
+    ).save(
+        path
+    )
 
 
 # ============================================================
@@ -489,45 +332,47 @@ def print_debug_information(debug):
 
 def display_results(
     input_image,
+    ground_truth,
     dehazed_image,
-    debug
+    residual,
+    debug,
+    metrics
 ):
+    """
+    Display:
 
-    # --------------------------------------------------------
-    # INPUT FOR DISPLAY
-    # --------------------------------------------------------
+        Hazy input
+        Clear reference
+        Dehazed output
+        Residual
+    """
 
-    input_display = prepare_for_display(
-        input_image
+    input_display = (
+        prepare_for_display(
+            input_image
+        )
     )
 
-
-    # --------------------------------------------------------
-    # OUTPUT FOR DISPLAY
-    # --------------------------------------------------------
-
-    output_display = prepare_for_display(
-        dehazed_image
+    ground_truth_display = (
+        prepare_for_display(
+            ground_truth
+        )
     )
 
-
-    # --------------------------------------------------------
-    # CHECK DEBUG MAPS
-    # --------------------------------------------------------
-
-    has_transmission = (
-        isinstance(debug, dict)
-        and "tm" in debug
+    output_display = (
+        prepare_for_display(
+            dehazed_image
+        )
     )
 
-    has_sfcae = (
-        isinstance(debug, dict)
-        and "sfcae_S_sky" in debug
+    residual_display = np.clip(
+        residual,
+        0.0,
+        1.0
     )
 
-
     # --------------------------------------------------------
-    # FIGURE
+    # Figure
     # --------------------------------------------------------
 
     fig, axes = plt.subplots(
@@ -536,9 +381,8 @@ def display_results(
         figsize=(12, 8)
     )
 
-
     # ========================================================
-    # INPUT
+    # HAZY INPUT
     # ========================================================
 
     axes[0, 0].imshow(
@@ -546,104 +390,78 @@ def display_results(
     )
 
     axes[0, 0].set_title(
-        "Hazy input"
+        "Hazy RGB Input"
     )
 
     axes[0, 0].axis(
         "off"
     )
 
-
     # ========================================================
-    # OUTPUT
+    # CLEAR REFERENCE
     # ========================================================
 
     axes[0, 1].imshow(
-        output_display
+        ground_truth_display
     )
 
     axes[0, 1].set_title(
-        "Dehazed output"
+        "Clear / Ground Truth"
     )
 
     axes[0, 1].axis(
         "off"
     )
 
-
     # ========================================================
-    # TRANSMISSION MAP
+    # DEHAZED
     # ========================================================
 
-    if has_transmission:
+    axes[1, 0].imshow(
+        output_display
+    )
 
-        axes[1, 0].imshow(
-            debug["tm"],
-            cmap="gray"
-        )
-
-        axes[1, 0].set_title(
-            "Transmission map"
-        )
-
-    else:
-
-        axes[1, 0].text(
-            0.5,
-            0.5,
-            "Transmission map\n"
-            "not returned",
-            ha="center",
-            va="center"
-        )
-
-        axes[1, 0].set_title(
-            "Transmission map"
-        )
+    axes[1, 0].set_title(
+        "RGB Dehazed Output"
+    )
 
     axes[1, 0].axis(
         "off"
     )
 
-
     # ========================================================
-    # S-FCAE
+    # RESIDUAL
     # ========================================================
 
-    if has_sfcae:
+    axes[1, 1].imshow(
+        residual_display
+    )
 
-        axes[1, 1].imshow(
-            debug["sfcae_S_sky"],
-            cmap="gray"
-        )
-
-        axes[1, 1].set_title(
-            "S-FCAE sky confidence"
-        )
-
-    else:
-
-        axes[1, 1].text(
-            0.5,
-            0.5,
-            "S-FCAE sky confidence\n"
-            "not returned",
-            ha="center",
-            va="center"
-        )
-
-        axes[1, 1].set_title(
-            "S-FCAE sky confidence"
-        )
+    axes[1, 1].set_title(
+        "Absolute Residual"
+    )
 
     axes[1, 1].axis(
         "off"
     )
 
+    # ========================================================
+    # METRIC TEXT
+    # ========================================================
 
-    # ========================================================
-    # DISPLAY
-    # ========================================================
+    fig.suptitle(
+        (
+            f"PSNR: "
+            f"{metrics['PSNR (dB)']:.2f} dB   |   "
+            f"SSIM: "
+            f"{metrics['SSIM']:.4f}   |   "
+            f"FSIM: "
+            f"{metrics['FSIM']:.4f}   |   "
+            f"EPI: "
+            f"{metrics['EPI']:.4f}"
+        ),
+        fontsize=12
+    )
 
     fig.tight_layout()
 
@@ -656,51 +474,62 @@ def display_results(
 
 def main():
 
-    # ========================================================
-    # HEADER
-    # ========================================================
-
+    print()
     print(
-        "\n============================================"
+        "============================================"
     )
 
     print(
-        " SINGLE IMAGE DEHAZING"
+        " RGB-ONLY SINGLE IMAGE DEHAZING"
     )
 
     print(
         "============================================"
     )
 
-
     # ========================================================
     # INPUT CHECK
     # ========================================================
 
+    print()
     print(
-        f"\nInput image:\n"
+        f"Input image:\n"
         f"{INPUT_IMAGE}"
     )
 
     if not INPUT_IMAGE.exists():
 
         raise FileNotFoundError(
-            "\nInput image does not exist:\n"
+            f"\nInput image does not exist:\n"
             f"{INPUT_IMAGE}"
         )
 
+    if not GROUND_TRUTH_IMAGE.exists():
+
+        raise FileNotFoundError(
+            f"\nGround-truth image does not exist:\n"
+            f"{GROUND_TRUTH_IMAGE}"
+        )
 
     # ========================================================
-    # READ IMAGE
+    # READ HAZY RGB
     # ========================================================
 
     image = read_image(
         INPUT_IMAGE
     )
 
+    # ========================================================
+    # READ CLEAR RGB
+    # ========================================================
 
+    ground_truth = read_image(
+        GROUND_TRUTH_IMAGE
+    )
+
+    print()
     print(
-        f"\nImage size       : "
+        f"Image size       : "
         f"{image.shape[1]} x "
         f"{image.shape[0]}"
     )
@@ -711,92 +540,175 @@ def main():
     )
 
     print(
-        f"Input channels   : "
-        f"{image.shape[2]}"
+        f"Input shape      : "
+        f"{image.shape}"
     )
-
-
-    # ========================================================
-    # GET FUNCTION
-    # ========================================================
-
-    dehaze_function = (
-        get_dehazing_function()
-    )
-
 
     print(
-        "\nDehazing function: "
-        "adaptive_dehaze(image)"
+        "Input format     : RGB"
     )
 
+    print(
+        f"Ground truth     : "
+        f"{ground_truth.shape}"
+    )
+
+    # ========================================================
+    # CHECK SIZE
+    # ========================================================
+
+    if image.shape != ground_truth.shape:
+
+        raise ValueError(
+            "\nHazy and ground-truth images "
+            "must have the same dimensions.\n"
+            f"Hazy : {image.shape}\n"
+            f"Clear: {ground_truth.shape}"
+        )
+
+    # ========================================================
+    # PARAMETERS
+    # ========================================================
+
+    params = DehazeParams(
+
+        down_factor=3,
+
+        patch_size=5,
+
+        gamma=2.0,
+
+        omega=0.9375,
+
+        t_min=0.10,
+
+        bilateral_d=9,
+
+        bilateral_sigma_color=0.05,
+
+        bilateral_sigma_space=15,
+
+        atmospheric_top_fraction=0.001,
+
+        # IMPORTANT:
+        # Keep false initially.
+        enable_clarity=True,
+
+        clarity_strength=0.20
+    )
+
+    # ========================================================
+    # PRINT PARAMETERS
+    # ========================================================
+
+    print()
+    print(
+        "--------------------------------------------"
+    )
+
+    print(
+        " DEHAZING PARAMETERS"
+    )
+
+    print(
+        "--------------------------------------------"
+    )
+
+    print(
+        f"Gamma            : "
+        f"{params.gamma}"
+    )
+
+    print(
+        f"Omega            : "
+        f"{params.omega}"
+    )
+
+    print(
+        f"Patch size       : "
+        f"{params.patch_size}"
+    )
+
+    print(
+        f"Minimum t        : "
+        f"{params.t_min}"
+    )
+
+    print(
+        f"Down factor      : "
+        f"{params.down_factor}"
+    )
+
+    print(
+        f"Clarity          : "
+        f"{params.enable_clarity}"
+    )
 
     # ========================================================
     # RUN DEHAZING
     # ========================================================
 
+    print()
     print(
-        "\nProcessing image..."
+        "Processing image..."
     )
 
     start = time.perf_counter()
 
-
-    # IMPORTANT:
-    #
-    # Your adaptive_dehaze() function accepts
-    # ONLY ONE ARGUMENT.
-    #
-    # The input is uint8 BGR because the function
-    # internally uses cv2.cvtColor().
-
-    result = dehaze_function(
-        image
+    result = adaptive_dehaze(
+        image,
+        params
     )
-
 
     elapsed = (
         time.perf_counter()
-        - start
+        -
+        start
     )
-
 
     # ========================================================
     # EXTRACT RESULT
     # ========================================================
 
-    (
-        dehazed_image,
-        state,
-        debug
-    ) = extract_result(
-        result
-    )
+    if isinstance(
+        result,
+        tuple
+    ):
 
+        dehazed_image = result[0]
 
-    # ========================================================
-    # CHECK OUTPUT
-    # ========================================================
+        if len(result) >= 3:
+
+            debug = result[2]
+
+        else:
+
+            debug = {}
+
+    else:
+
+        dehazed_image = result
+
+        debug = {}
 
     if dehazed_image is None:
 
         raise RuntimeError(
             "adaptive_dehaze() did not return "
-            "a valid dehazed image."
+            "a valid image."
         )
-
 
     dehazed_image = np.asarray(
         dehazed_image
     )
 
-
     # ========================================================
     # RESULTS
     # ========================================================
 
+    print()
     print(
-        "\n============================================"
+        "============================================"
     )
 
     print(
@@ -822,18 +734,79 @@ def main():
         f"{dehazed_image.dtype}"
     )
 
+    print(
+        "Output format    : RGB"
+    )
 
     # ========================================================
     # DEBUG
     # ========================================================
 
-    print_debug_information(
-        debug
+    print()
+    print(
+        "--------------------------------------------"
     )
 
+    print(
+        " DEBUG INFORMATION"
+    )
+
+    print(
+        "--------------------------------------------"
+    )
+
+    if "AF" in debug:
+
+        print(
+            f"Far AF           : "
+            f"{np.round(debug['AF'], 4)}"
+        )
+
+    if "AN" in debug:
+
+        print(
+            f"Near AN          : "
+            f"{np.round(debug['AN'], 4)}"
+        )
+
+    if "Th" in debug:
+
+        print(
+            f"Threshold Th     : "
+            f"{debug['Th']:.4f}"
+        )
+
+    if "haze_strength" in debug:
+
+        print(
+            f"Haze strength    : "
+            f"{debug['haze_strength']:.4f}"
+        )
+
+    if "tm" in debug:
+
+        tm = np.asarray(
+            debug["tm"]
+        )
+
+        print(
+            f"Transmission     : "
+            f"[{tm.min():.4f}, "
+            f"{tm.max():.4f}]"
+        )
+
+    print(
+        f"Gamma used       : "
+        f"{params.gamma}"
+    )
+
+    print(
+        f"Omega used       : "
+        f"{params.omega}"
+    )
 
     # ========================================================
-    # SAVE OUTPUT
+    # SAVE DEHAZED OUTPUT
     # ========================================================
 
     save_output(
@@ -841,12 +814,99 @@ def main():
         dehazed_image
     )
 
-
+    print()
     print(
-        f"\nSaved            : "
+        f"Saved RGB output:\n"
         f"{OUTPUT_IMAGE}"
     )
 
+    # ========================================================
+    # QUALITY EVALUATION
+    # ========================================================
+
+    print()
+    print(
+        "============================================"
+    )
+
+    print(
+        " IMAGE QUALITY EVALUATION"
+    )
+
+    print(
+        "============================================"
+    )
+
+    (
+        metrics,
+        residual
+    ) = calculate_all_metrics(
+        ground_truth,
+        dehazed_image
+    )
+
+    # ========================================================
+    # PRINT METRICS
+    # ========================================================
+
+    print()
+    print(
+        "--------------------------------------------"
+    )
+
+    print(
+        f"PSNR (dB)          : "
+        f"{metrics['PSNR (dB)']:.4f}"
+    )
+
+    print(
+        f"SSIM               : "
+        f"{metrics['SSIM']:.4f}"
+    )
+
+    print(
+        f"FSIM               : "
+        f"{metrics['FSIM']:.4f}"
+    )
+
+    print(
+        f"EPI                : "
+        f"{metrics['EPI']:.4f}"
+    )
+
+    print(
+        f"Residual MAE       : "
+        f"{metrics['Residual MAE']:.6f}"
+    )
+
+    print(
+        f"Residual MSE       : "
+        f"{metrics['Residual MSE']:.6f}"
+    )
+
+    print(
+        f"Maximum Residual   : "
+        f"{metrics['Maximum Residual']:.6f}"
+    )
+
+    print(
+        "--------------------------------------------"
+    )
+
+    # ========================================================
+    # SAVE RESIDUAL
+    # ========================================================
+
+    save_residual_image(
+        RESIDUAL_IMAGE,
+        residual
+    )
+
+    print()
+    print(
+        f"Residual saved:\n"
+        f"{RESIDUAL_IMAGE}"
+    )
 
     # ========================================================
     # DISPLAY
@@ -854,8 +914,11 @@ def main():
 
     display_results(
         image,
+        ground_truth,
         dehazed_image,
-        debug
+        residual,
+        debug,
+        metrics
     )
 
 

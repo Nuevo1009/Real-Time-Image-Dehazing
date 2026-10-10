@@ -4,105 +4,157 @@ import numpy as np
 
 def enhance_clarity(
     image,
-    clip_limit=2.0,
+    clip_limit=1.5,
     tile_grid_size=(8, 8),
-    sharpen_amount=0.7
+    strength=0.20,
+    sharpen_amount=0.15
 ):
     """
-    Post-processing stage for improving local contrast
-    and perceived sharpness after dehazing.
+    Optional RGB-only clarity enhancement.
+
+    No BGR/RGB conversion.
+    No LAB conversion.
 
     Input:
-        image: RGB float image [0,1]
+        RGB float32 [0,1]
 
     Output:
-        RGB float image [0,1]
+        RGB float32 [0,1]
     """
 
-    # --------------------------------------------------------
-    # Ensure valid range
-    # --------------------------------------------------------
+    image = np.asarray(
+        image,
+        dtype=np.float32
+    )
 
     image = np.clip(
         image,
         0.0,
         1.0
-    ).astype(
-        np.float32
     )
 
     # --------------------------------------------------------
-    # Convert RGB -> uint8
+    # RGB luminance
     # --------------------------------------------------------
 
-    image_uint8 = (
-        image * 255.0
+    luminance = (
+        0.299 * image[:, :, 0]
+        +
+        0.587 * image[:, :, 1]
+        +
+        0.114 * image[:, :, 2]
+    )
+
+    luminance = np.clip(
+        luminance,
+        0.0,
+        1.0
+    )
+
+    # --------------------------------------------------------
+    # CLAHE only on luminance
+    # --------------------------------------------------------
+
+    luminance_uint8 = (
+        luminance * 255.0
     ).astype(
         np.uint8
     )
-
-    # --------------------------------------------------------
-    # CLAHE on luminance channel
-    # --------------------------------------------------------
-
-    lab = cv2.cvtColor(
-        image_uint8,
-        cv2.COLOR_RGB2LAB
-    )
-
-    L, A, B = cv2.split(lab)
 
     clahe = cv2.createCLAHE(
         clipLimit=clip_limit,
         tileGridSize=tile_grid_size
     )
 
-    L_enhanced = clahe.apply(L)
-
-    lab_enhanced = cv2.merge(
-        [
-            L_enhanced,
-            A,
-            B
-        ]
+    enhanced_luminance_uint8 = (
+        clahe.apply(
+            luminance_uint8
+        )
     )
 
-    contrast_enhanced = cv2.cvtColor(
-        lab_enhanced,
-        cv2.COLOR_LAB2RGB
-    )
-
-    # --------------------------------------------------------
-    # Unsharp masking
-    # --------------------------------------------------------
-
-    blurred = cv2.GaussianBlur(
-        contrast_enhanced,
-        (0, 0),
-        sigmaX=1.0
-    )
-
-    sharpened = cv2.addWeighted(
-        contrast_enhanced,
-        1.0 + sharpen_amount,
-        blurred,
-        -sharpen_amount,
-        0
+    enhanced_luminance = (
+        enhanced_luminance_uint8.astype(
+            np.float32
+        )
+        /
+        255.0
     )
 
     # --------------------------------------------------------
-    # Back to [0,1]
+    # Controlled blending
     # --------------------------------------------------------
+
+    enhanced_luminance = (
+        (1.0 - strength)
+        *
+        luminance
+        +
+        strength
+        *
+        enhanced_luminance
+    )
+
+    # --------------------------------------------------------
+    # Preserve RGB ratios
+    # --------------------------------------------------------
+
+    scale = (
+        enhanced_luminance
+        /
+        np.maximum(
+            luminance,
+            1e-3
+        )
+    )
+
+    scale = np.clip(
+        scale,
+        0.75,
+        1.50
+    )
 
     result = (
-        np.clip(
-            sharpened,
-            0,
-            255
-        )
-        / 255.0
-    ).astype(
-        np.float32
+        image
+        *
+        scale[:, :, np.newaxis]
     )
 
-    return result
+    result = np.clip(
+        result,
+        0.0,
+        1.0
+    )
+
+    # --------------------------------------------------------
+    # Mild sharpening
+    # --------------------------------------------------------
+
+    if sharpen_amount > 0.0:
+
+        blurred = cv2.GaussianBlur(
+            result,
+            (0, 0),
+            sigmaX=1.0
+        )
+
+        result = (
+            result
+            +
+            sharpen_amount
+            *
+            (
+                result
+                -
+                blurred
+            )
+        )
+
+        result = np.clip(
+            result,
+            0.0,
+            1.0
+        )
+
+    return result.astype(
+        np.float32
+    )
